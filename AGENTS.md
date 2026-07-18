@@ -59,3 +59,46 @@ required by AGPL-3.0 §13 for modified versions used over a network.
 - Do not add inline comments unless explicitly requested.
 - Match the style of neighboring files; do not introduce new frameworks
   without checking the project first.
+
+## Project mission
+
+Build an independent, web-native desktop for administering headless Ubuntu
+servers. The browser renders the desktop, applications, windows, menus and
+animations locally. The server exposes typed system capabilities and streams
+state changes.
+
+The product must feel calm and desktop-native, inspired by macOS interaction
+principles, but must use original branding, visual assets, typography,
+components, layouts and implementation.
+
+## Clean-room rules
+
+1. This is an independent implementation.
+2. Do not clone, open, search, fetch or inspect third-party public
+   repositories for implementation reference.
+3. Do not reproduce source code, tests, CSS, assets, DOM structure,
+   comments, strings, internal identifiers or undocumented protocols from
+   other projects.
+4. Do not translate another project's code into another language.
+5. Do not use generated code derived from another project's source.
+6. Official documentation (Ubuntu, systemd, D-Bus, polkit, POSIX, web
+   standards) may be used as technical references.
+7. Implement from the product specifications in this repository.
+8. Record the reference specification and original design rationale in each
+   pull request.
+9. Stop and report any accidental exposure to another project's source.
+
+## System principles
+
+1. The live Ubuntu system is the source of truth.
+2. Do not maintain a duplicate desired-state database for the host.
+3. Reflect changes made through SSH or other tools.
+4. Run ordinary operations as the authenticated Linux user.
+5. Use a small, typed privileged broker for elevated actions.
+6. Never expose a generic root shell or arbitrary privileged command API.
+7. Prefer stable machine APIs such as D-Bus over parsing human-readable CLI
+   output.
+8. Make risky operations transactional and reversible.
+9. Every privileged mutation must be authenticated, authorized, validated,
+   idempotent where possible and audited.
+10. Keep idle server resource usage low.
