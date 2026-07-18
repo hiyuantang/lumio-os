@@ -6,10 +6,4 @@ dist-ssr/
 coverage/
 playwright-report/
 test-results/
-.superpowers/
-docs/superpowers/
-BIG-PICTURE.md
-docs/PRODUCT.md
-docs/SUPPORTED_SYSTEMS.md
-docs/DESIGN_PRINCIPLES.md
-docs/CLEAN_ROOM.md
+docs/*
