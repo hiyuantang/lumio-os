@@ -64,23 +64,49 @@ required by AGPL-3.0 §13 for modified versions used over a network.
 
 The repository root is a Vite + React + TypeScript application (strict
 mode, no UI component library, plain CSS with design tokens in
-`src/styles/tokens.css`).
+`src/styles/tokens.css`). The server is Go (project-local toolchain in
+`.tools/`, gitignored; run `go` as `.tools/go/bin/go` with
+`GOMODCACHE`, `GOCACHE`, `GOPATH` all set under `.tools/`).
+
+Frontend:
 
 - `npm install` — install dependencies.
-- `npm run dev` — start the dev server.
+- `npm run dev` — dev server with mock data (default).
+- `npm run dev:live` — dev server against a running `lumiod`
+  (proxies `/api`, including WebSocket, to `127.0.0.1:8080`).
 - `npm run build` — typecheck (`tsc --noEmit`) and build. Must pass
-  clean before any change is considered done.
-- `npm test` — Playwright smoke tests (chromium only; one-time browser
-  setup via `npx playwright install chromium`).
+  clean before any change is considered done. Production builds default
+  to live mode; `npm run build:mock` forces mock.
+- `npm test` — Playwright tests (chromium only; one-time browser setup
+  via `npx playwright install chromium`).
+
+Backend (`server/` module `lumio-os/server`):
+
+- `cd server && go test ./...` — unit tests (run on macOS).
+- `scripts/integration-test.sh` — full integration gate: builds a
+  linux/arm64 `lumiod`, runs a privileged systemd Ubuntu 24.04
+  container, asserts REST + WebSocket behavior including the
+  "systemctl change appears over WS" exit gate. Requires Docker.
+- `scripts/build-with-web.sh` — build `server/bin/lumiod` with the
+  frontend embedded (`-tags webdist`).
+- `lumiod` binds `127.0.0.1:8080` by default; no auth in Phase 2
+  (localhost-only). The wire contract is `docs/PROTOCOL.md`; implement
+  from it, not from other projects.
 
 Layout:
 
 - `src/shell/` — desktop shell (window manager, menu bar, dock, command
   center, notification center, login).
 - `src/apps/` — applications rendered inside shell windows.
-- `src/mock/` — typed mock system layer. Apps must read system state
-  only through this seam so a real backend can replace it; never call
-  `fetch` directly from components.
+- `src/api/` — typed data-source seam + live protocol client.
+- `src/mock/` — mock implementation of the seam. Apps must read system
+  state only through the seam (`src/api/source.ts`); never call `fetch`
+  directly from components.
+- `server/cmd/lumiod/` — the agent binary (gateway + agent in one
+  process until the Phase 4 split).
+- `server/internal/` — httpapi, wsapi, system, services, journal,
+  files, static.
+- `docker/` — systemd test image; `scripts/` — build and test scripts.
 - `tests/` — Playwright specs.
 
 UI checks use `data-testid` hooks; keep existing testids stable and add

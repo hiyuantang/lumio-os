@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { getDataSource, type ServiceUnit } from '../api/source';
 import { APP_ORDER, APPS } from '../apps/registry';
-import { listServices, runServiceAction } from '../mock/system';
 import { IconSearch } from './icons';
 import { useShell } from './ShellContext';
 import '../styles/command-center.css';
@@ -30,10 +30,26 @@ function fuzzyRank(text: string, query: string): number | null {
 
 export function CommandCenter() {
   const { state, actions, resolvedTheme, reducedMotion } = useShell();
+  const source = getDataSource();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
+  const [services, setServices] = useState<ServiceUnit[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!state.paletteOpen || !source.capabilities.canServiceActions) return;
+    let alive = true;
+    source
+      .listServices()
+      .then((units) => {
+        if (alive) setServices(units);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [source, state.paletteOpen]);
 
   const allActions = useMemo<CmdAction[]>(() => {
     const list: CmdAction[] = [];
@@ -47,18 +63,20 @@ export function CommandCenter() {
         run: () => actions.openApp(appId),
       });
     }
-    for (const svc of listServices()) {
-      list.push({
-        id: `restart-${svc.name}`,
-        title: `Restart ${svc.name}`,
-        group: 'Services',
-        keywords: `restart service ${svc.name} ${svc.description}`,
-        run: () => {
-          void runServiceAction(svc.name, 'restart').then((unit) =>
-            actions.notify('Service restarted', `${unit.name} is ${unit.state}.`),
-          );
-        },
-      });
+    if (source.capabilities.canServiceActions) {
+      for (const svc of services) {
+        list.push({
+          id: `restart-${svc.name}`,
+          title: `Restart ${svc.name}`,
+          group: 'Services',
+          keywords: `restart service ${svc.name} ${svc.description}`,
+          run: () => {
+            void source.runServiceAction(svc.name, 'restart').then((unit) =>
+              actions.notify('Service restarted', `${unit.name} is ${unit.state}.`),
+            );
+          },
+        });
+      }
     }
     list.push(
       {
@@ -91,7 +109,7 @@ export function CommandCenter() {
       },
     );
     return list;
-  }, [actions, resolvedTheme, reducedMotion]);
+  }, [actions, resolvedTheme, reducedMotion, services, source]);
 
   const results = useMemo(() => {
     return allActions

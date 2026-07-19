@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { getDataSource, type LoadSample } from '../api/source';
 import { APPS } from '../apps/registry';
-import { sampleLoad, type LoadSample } from '../mock/system';
 import { IconBell, IconChip, IconNetwork, IconUser } from './icons';
 import { MENUBAR_H, useNow, useShell } from './ShellContext';
 import '../styles/menubar.css';
@@ -20,15 +20,27 @@ interface MenuItemDef {
 
 export function MenuBar() {
   const { state, actions, resolvedTheme, reducedMotion } = useShell();
+  const source = getDataSource();
   const [openMenu, setOpenMenu] = useState<MenuId | null>(null);
-  const [load, setLoad] = useState<LoadSample>(() => sampleLoad());
+  const [load, setLoad] = useState<LoadSample>(() => source.sampleLoad());
+  const [hostname, setHostname] = useState<string | null>(null);
   const now = useNow(1000);
   const barRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => source.subscribeMetrics(setLoad), [source]);
+
   useEffect(() => {
-    const id = window.setInterval(() => setLoad(sampleLoad()), 2000);
-    return () => window.clearInterval(id);
-  }, []);
+    let alive = true;
+    source
+      .getIdentity()
+      .then((identity) => {
+        if (alive) setHostname(identity.hostname);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [source]);
 
   const focusedTitle = state.focused ? APPS[state.focused].title : null;
 
@@ -205,7 +217,7 @@ export function MenuBar() {
       {openMenu && <div className="menubar-backdrop" onClick={() => setOpenMenu(null)} />}
       <div className="menubar-left">
         <span className="menubar-brand">Lumio OS</span>
-        <span className="menubar-host">atlas.lan</span>
+        {hostname && <span className="menubar-host">{hostname}</span>}
         <nav className="menubar-menus" role="menubar" aria-label="Application menus">
           {renderMenu('file')}
           {renderMenu('view')}
@@ -213,11 +225,11 @@ export function MenuBar() {
         {focusedTitle && <span className="menubar-focused">{focusedTitle}</span>}
       </div>
       <div className="menubar-right">
-        <span className="menubar-indicator" title="CPU load (mock)">
+        <span className="menubar-indicator" title={source.capabilities.isLive ? 'CPU load' : 'CPU load (mock)'}>
           <IconChip size={13} />
           {load.cpuPercent}%
         </span>
-        <span className="menubar-indicator" title="Network throughput (mock)">
+        <span className="menubar-indicator" title={source.capabilities.isLive ? 'Network throughput' : 'Network throughput (mock)'}>
           <IconNetwork size={13} />
           {load.netDownKbps >= 1024 ? `${(load.netDownKbps / 1024).toFixed(1)} MB/s` : `${load.netDownKbps} KB/s`}
         </span>

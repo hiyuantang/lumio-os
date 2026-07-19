@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LOG_UNITS, makeLogLine, seedLogLines, type LogLine, type LogPriority } from '../mock/journal';
+import { describeError, getDataSource, type LogLine, type LogPriority } from '../api/source';
 import { IconPause, IconPlay, IconSearch } from '../shell/icons';
 import '../styles/apps.css';
 import '../styles/logs.css';
@@ -14,7 +14,12 @@ const PRIORITY_FILTERS: { id: 'all' | LogPriority; label: string }[] = [
 ];
 
 export function Logs() {
-  const [lines, setLines] = useState<LogLine[]>(() => seedLogLines(40));
+  const source = getDataSource();
+  const [lines, setLines] = useState<LogLine[]>([]);
+  const [units, setUnits] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [paused, setPaused] = useState(false);
   const [priority, setPriority] = useState<'all' | LogPriority>('all');
   const [unit, setUnit] = useState('all');
@@ -23,12 +28,44 @@ export function Logs() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    let alive = true;
+    source
+      .queryJournal({ limit: 40 })
+      .then((page) => {
+        if (!alive) return;
+        setLines(page.entries);
+        setLoadError(null);
+      })
+      .catch((err) => {
+        if (alive) setLoadError(describeError(err));
+      });
+    source
+      .listJournalUnits()
+      .then((list) => {
+        if (alive) setUnits(list);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [source, retryNonce]);
+
+  useEffect(() => {
     if (paused) return;
-    const id = window.setInterval(() => {
-      setLines((prev) => [...prev.slice(-400), makeLogLine()]);
-    }, 2000);
-    return () => window.clearInterval(id);
-  }, [paused]);
+    setStreamError(null);
+    return source.streamJournal(
+      (line) => {
+        setStreamError(null);
+        setLines((prev) => [...prev.slice(-400), line]);
+      },
+      () => setStreamError('Log stream interrupted. Reconnecting…'),
+    );
+  }, [source, paused]);
+
+  const unitOptions = useMemo(
+    () => [...new Set([...units, ...lines.map((line) => line.unit)])].sort(),
+    [units, lines],
+  );
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -71,7 +108,7 @@ export function Logs() {
           aria-label="Filter by unit"
         >
           <option value="all">All units</option>
-          {LOG_UNITS.map((u) => (
+          {unitOptions.map((u) => (
             <option key={u} value={u}>
               {u}
             </option>
@@ -98,6 +135,12 @@ export function Logs() {
         </button>
       </div>
 
+      {streamError && (
+        <p className="logs-banner" data-testid="logs-stream-error">
+          {streamError}
+        </p>
+      )}
+
       <div className="logs-list" ref={scrollRef} role="log" aria-label="Journal stream" data-testid="logs-list">
         {filtered.map((line) => (
           <button
@@ -115,7 +158,15 @@ export function Logs() {
             <span className="logs-message">{line.message}</span>
           </button>
         ))}
-        {filtered.length === 0 && <p className="logs-empty">No log lines match the current filters.</p>}
+        {loadError && (
+          <p className="logs-empty">
+            {loadError}{' '}
+            <button type="button" className="btn" data-testid="logs-retry" onClick={() => setRetryNonce((n) => n + 1)}>
+              Retry
+            </button>
+          </p>
+        )}
+        {!loadError && filtered.length === 0 && <p className="logs-empty">No log lines match the current filters.</p>}
       </div>
 
       {selected && (

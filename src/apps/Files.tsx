@@ -1,16 +1,46 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { formatSize, homePath, listDir, type FsEntry } from '../mock/filesystem';
+import { describeError, getDataSource, type FsEntry } from '../api/source';
+import { formatSize } from '../mock/filesystem';
 import { IconChevronRight, IconEye, IconFile, IconFolder } from '../shell/icons';
 import '../styles/apps.css';
 import '../styles/files.css';
 
-export function Files() {
-  const [path, setPath] = useState<string[]>(() => homePath());
-  const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [quickLook, setQuickLook] = useState<FsEntry | null>(null);
+interface QuickLookState {
+  entry: FsEntry;
+  content: string | null;
+  revision: string | null;
+  loading: boolean;
+  error: string | null;
+}
 
-  const entries = listDir(path);
+export function Files() {
+  const source = getDataSource();
+  const [path, setPath] = useState<string[]>(() => source.homePath());
+  const [entries, setEntries] = useState<FsEntry[]>([]);
+  const [listError, setListError] = useState<string | null>(null);
+  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [quickLook, setQuickLook] = useState<QuickLookState | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    source
+      .listDir(path)
+      .then((list) => {
+        if (!alive) return;
+        setEntries(list);
+        setListError(null);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setEntries([]);
+        setListError(describeError(err));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [source, path]);
+
   const selected = entries.find((e) => e.name === selectedName) ?? null;
 
   useEffect(() => {
@@ -27,9 +57,28 @@ export function Files() {
     setSelectedName(null);
   }
 
+  function openQuickLook(entry: FsEntry) {
+    setQuickLook({ entry, content: null, revision: null, loading: entry.kind === 'file', error: null });
+    if (entry.kind !== 'file') return;
+    source
+      .readFile([...path, entry.name])
+      .then((read) => {
+        setQuickLook((prev) =>
+          prev?.entry.name === entry.name
+            ? { ...prev, content: read.content, revision: read.revision, loading: false }
+            : prev,
+        );
+      })
+      .catch((err) => {
+        setQuickLook((prev) =>
+          prev?.entry.name === entry.name ? { ...prev, loading: false, error: describeError(err) } : prev,
+        );
+      });
+  }
+
   function activate(entry: FsEntry) {
     if (entry.kind === 'dir') navigateTo([...path, entry.name]);
-    else setQuickLook(entry);
+    else openQuickLook(entry);
   }
 
   function onRowKey(e: ReactKeyboardEvent, entry: FsEntry) {
@@ -38,7 +87,7 @@ export function Files() {
       activate(entry);
     } else if (e.key === ' ') {
       e.preventDefault();
-      setQuickLook(entry);
+      openQuickLook(entry);
     } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       const idx = entries.findIndex((en) => en.name === entry.name);
@@ -55,7 +104,7 @@ export function Files() {
     <div className="app files" data-testid="app-files">
       <div className="app-toolbar">
         <nav className="files-breadcrumbs" aria-label="Path">
-          <button type="button" className="files-crumb" onClick={() => navigateTo(homePath())}>
+          <button type="button" className="files-crumb" onClick={() => navigateTo(source.homePath())}>
             Home
           </button>
           {path.slice(1).map((segment, i) => (
@@ -76,7 +125,7 @@ export function Files() {
           className="btn files-quicklook-btn"
           data-testid="quick-look-button"
           disabled={!selected}
-          onClick={() => selected && setQuickLook(selected)}
+          onClick={() => selected && openQuickLook(selected)}
         >
           <IconEye size={13} />
           Quick Look
@@ -111,7 +160,15 @@ export function Files() {
             <span className="file-modified">{entry.modified}</span>
           </div>
         ))}
-        {entries.length === 0 && <p className="files-empty">This folder is empty.</p>}
+        {listError && (
+          <p className="files-empty">
+            {listError}{' '}
+            <button type="button" className="btn" data-testid="files-retry" onClick={() => setPath((p) => [...p])}>
+              Retry
+            </button>
+          </p>
+        )}
+        {!listError && entries.length === 0 && <p className="files-empty">This folder is empty.</p>}
       </div>
 
       {quickLook && (
@@ -120,13 +177,13 @@ export function Files() {
             className="quicklook"
             role="dialog"
             aria-modal="true"
-            aria-label={`Quick Look ${quickLook.name}`}
+            aria-label={`Quick Look ${quickLook.entry.name}`}
             data-testid="quick-look"
             onPointerDown={(e) => e.stopPropagation()}
           >
             <header className="quicklook-header">
-              {quickLook.kind === 'dir' ? <IconFolder size={16} /> : <IconFile size={16} />}
-              <strong>{quickLook.name}</strong>
+              {quickLook.entry.kind === 'dir' ? <IconFolder size={16} /> : <IconFile size={16} />}
+              <strong>{quickLook.entry.name}</strong>
               <button type="button" className="btn" onClick={() => setQuickLook(null)}>
                 Close
               </button>
@@ -134,28 +191,46 @@ export function Files() {
             <dl className="quicklook-meta">
               <div>
                 <dt>Kind</dt>
-                <dd>{quickLook.kind === 'dir' ? 'Folder' : 'File'}</dd>
+                <dd>{quickLook.entry.kind === 'dir' ? 'Folder' : 'File'}</dd>
               </div>
               <div>
                 <dt>Size</dt>
                 <dd className="mono">
-                  {quickLook.kind === 'dir' ? `${quickLook.children?.length ?? 0} items` : formatSize(quickLook.size)}
+                  {quickLook.entry.kind === 'dir'
+                    ? quickLook.entry.children
+                      ? `${quickLook.entry.children.length} items`
+                      : formatSize(quickLook.entry.size)
+                    : formatSize(quickLook.entry.size)}
                 </dd>
               </div>
               <div>
                 <dt>Modified</dt>
-                <dd>{quickLook.modified}</dd>
+                <dd>{quickLook.entry.modified}</dd>
               </div>
               <div>
                 <dt>Path</dt>
-                <dd className="mono">/home/{[...path, quickLook.name].join('/')}</dd>
+                <dd className="mono">/home/{[...path, quickLook.entry.name].join('/')}</dd>
               </div>
+              {quickLook.revision && (
+                <div>
+                  <dt>Revision</dt>
+                  <dd className="mono" data-testid="quick-look-revision">
+                    {quickLook.revision}
+                  </dd>
+                </div>
+              )}
             </dl>
-            {quickLook.content ? (
+            {quickLook.loading ? (
+              <p className="quicklook-none">Loading…</p>
+            ) : quickLook.error ? (
+              <p className="quicklook-none">{quickLook.error}</p>
+            ) : quickLook.content ? (
               <pre className="quicklook-preview">{quickLook.content.slice(0, 800)}</pre>
             ) : (
               <p className="quicklook-none">
-                {quickLook.kind === 'dir' ? 'Double-click to open this folder.' : 'No preview available for this file.'}
+                {quickLook.entry.kind === 'dir'
+                  ? 'Double-click to open this folder.'
+                  : 'No preview available for this file.'}
               </p>
             )}
           </div>

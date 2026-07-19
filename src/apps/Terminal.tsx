@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { getDataSource } from '../api/source';
 import { homePath, listDir } from '../mock/filesystem';
 import { uptimeSeconds } from '../mock/system';
 import { useShell } from '../shell/ShellContext';
@@ -75,6 +76,21 @@ function evaluate(raw: string, ctx: { user: string }): { out: string[]; clear?: 
 }
 
 export function Terminal() {
+  const { capabilities } = getDataSource();
+  if (!capabilities.canTerminal) {
+    return (
+      <div className="app terminal" data-testid="app-terminal">
+        <div className="terminal-placeholder">
+          <p className="terminal-placeholder-title">Terminal</p>
+          <p>A live terminal session arrives in a later phase of the server.</p>
+        </div>
+      </div>
+    );
+  }
+  return <MockTerminal />;
+}
+
+function MockTerminal() {
   const { state, actions } = useShell();
   const user = state.user ?? 'user';
   const [lines, setLines] = useState<TermLine[]>([

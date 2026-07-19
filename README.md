@@ -68,12 +68,14 @@ automatic rollback.
 
 ## How to use it
 
-> **Status: Phase 1.** The desktop shell runs locally against mock data
-> — no real server connection and no installable package yet. The
-> numbered flow below describes the intended experience once the first
-> release ships.
+> **Status: Phase 2.** The desktop runs against mock data by default,
+> or against a real Ubuntu host via the read-only Go agent (`lumiod`):
+> live identity, metrics, systemd units, journal and file reads.
+> No authentication yet — the agent binds to localhost; reach it
+> through an SSH tunnel. No installable package yet. The numbered flow
+> below describes the intended experience once the first release ships.
 
-Run the Phase 1 preview:
+Run the desktop with mock data:
 
 ```sh
 npm install
@@ -81,10 +83,23 @@ npx playwright install chromium   # one-time, for tests
 npm run dev                       # then open the printed localhost URL
 ```
 
-Any non-empty username and password logs you into the mock desktop.
-Useful shortcuts: `⌘/Ctrl+K` command center, `Alt+W` close window,
-`Ctrl+Alt+←/→` cycle windows. `npm test` runs the Playwright smoke
-tests; `npm run build` typechecks and builds.
+Run it against a real Ubuntu host (or the Docker testbed):
+
+```sh
+scripts/build-with-web.sh         # builds lumiod with the UI embedded
+server/bin/lumiod                 # on the Ubuntu host; serves :8080 on localhost
+ssh -L 8080:127.0.0.1:8080 user@host   # from your machine, then open http://localhost:8080
+```
+
+`scripts/integration-test.sh` spins up a privileged systemd Ubuntu
+24.04 container and runs the full REST/WebSocket assertion suite,
+including the "stop a service over SSH, watch it flip in the UI"
+exit gate.
+
+Any non-empty username and password logs you into the desktop (login is
+still a mock until Phase 4). Useful shortcuts: `⌘/Ctrl+K` command
+center, `Alt+W` close window, `Ctrl+Alt+←/→` cycle windows. `npm test`
+runs the Playwright tests; `npm run build` typechecks and builds.
 
 The target experience for the first release:
 

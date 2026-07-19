@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useState } from 'react';
-import { getOverview, uptimeSeconds, type SystemOverview } from '../mock/system';
+import { useEffect, useRef, useState } from 'react';
+import { describeError, getDataSource, type SystemOverview } from '../api/source';
 import { useNow } from '../shell/ShellContext';
 import '../styles/apps.css';
 import '../styles/home.css';
@@ -29,14 +29,60 @@ function Sparkline({ values }: { values: number[] }) {
 }
 
 export function Home() {
-  const [overview, setOverview] = useState<SystemOverview>(() => getOverview());
+  const source = getDataSource();
+  const [overview, setOverview] = useState<SystemOverview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const loadedRef = useRef(false);
   const now = useNow(1000);
   void now;
 
   useEffect(() => {
-    const id = window.setInterval(() => setOverview(getOverview()), 2000);
-    return () => window.clearInterval(id);
-  }, []);
+    let alive = true;
+    const load = async () => {
+      try {
+        const next = await source.getOverview();
+        if (!alive) return;
+        loadedRef.current = true;
+        setOverview(next);
+        setError(null);
+      } catch (err) {
+        if (!alive || loadedRef.current) return;
+        setError(describeError(err));
+      }
+    };
+    void load();
+    const id = window.setInterval(() => void load(), 2000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, [source, retryNonce]);
+
+  if (!overview) {
+    return (
+      <div className="app home" data-testid="app-home">
+        <div className="home-grid">
+          <section className="home-card home-identity" aria-label="System status">
+            {error ? (
+              <>
+                <h2>Cannot reach the server</h2>
+                <p className="home-muted">{error}</p>
+                <button type="button" className="btn" data-testid="home-retry" onClick={() => setRetryNonce((n) => n + 1)}>
+                  Retry
+                </button>
+              </>
+            ) : (
+              <>
+                <h2>Connecting…</h2>
+                <p className="home-muted">Loading system state.</p>
+              </>
+            )}
+          </section>
+        </div>
+      </div>
+    );
+  }
 
   const memPct = Math.round((overview.memoryUsedMb / overview.memoryTotalMb) * 100);
   const diskPct = Math.round((overview.storageUsedGb / overview.storageTotalGb) * 100);
@@ -57,7 +103,7 @@ export function Home() {
             </div>
             <div>
               <dt>Uptime</dt>
-              <dd className="mono">{formatUptime(uptimeSeconds())}</dd>
+              <dd className="mono">{formatUptime(source.uptimeSeconds())}</dd>
             </div>
           </dl>
         </section>

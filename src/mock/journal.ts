@@ -1,17 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { LogLine, LogPriority } from '../api/source';
 
-export type LogPriority = 'err' | 'warning' | 'info' | 'debug';
-
-export interface LogLine {
-  id: number;
-  timestamp: number;
-  priority: LogPriority;
-  priorityCode: 3 | 4 | 6 | 7;
-  unit: string;
-  message: string;
-  pid: number;
-  hostname: string;
-}
+export type { LogLine, LogPriority } from '../api/source';
 
 const PRIORITY_CODE: Record<LogPriority, 3 | 4 | 6 | 7> = {
   err: 3,

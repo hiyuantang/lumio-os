@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { FsEntry } from '../api/source';
 
-export interface FsEntry {
-  name: string;
-  kind: 'dir' | 'file';
-  size: number;
-  modified: string;
-  content?: string;
-  children?: FsEntry[];
-}
+export type { FsEntry } from '../api/source';
 
 const HOME: FsEntry = {
   name: 'user',

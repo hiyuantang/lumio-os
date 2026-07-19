@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:live": "VITE_LUMIO_LIVE=1 vite",
     "build": "tsc --noEmit && vite build",
+    "build:mock": "VITE_LUMIO_LIVE=0 npm run build",
     "preview": "vite preview",
     "test": "playwright test"
   },

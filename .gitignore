@@ -1,4 +1,5 @@
 node_modules/
+.tools/
 dist/
 dist-ssr/
 *.local
@@ -7,3 +8,6 @@ coverage/
 playwright-report/
 test-results/
 docs/*
+server/bin/
+server/internal/static/dist/
+docker/.build/

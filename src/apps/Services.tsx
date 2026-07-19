@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useMemo, useState } from 'react';
 import {
-  listServices,
-  runServiceAction,
-  subscribeServices,
+  describeError,
+  getDataSource,
   type ServiceAction,
   type ServiceUnit,
-} from '../mock/system';
+} from '../api/source';
 import { useShell } from '../shell/ShellContext';
 import { IconSearch } from '../shell/icons';
 import '../styles/apps.css';
@@ -45,12 +44,35 @@ function actionAvailable(unit: ServiceUnit, action: ServiceAction): boolean {
 
 export function Services() {
   const { actions } = useShell();
-  const [services, setServices] = useState<ServiceUnit[]>(() => listServices());
+  const source = getDataSource();
+  const canAct = source.capabilities.canServiceActions;
+  const [services, setServices] = useState<ServiceUnit[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [query, setQuery] = useState('');
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<ServiceAction | null>(null);
 
-  useEffect(() => subscribeServices(() => setServices(listServices())), []);
+  useEffect(() => {
+    let alive = true;
+    source
+      .listServices()
+      .then((units) => {
+        if (!alive) return;
+        setServices(units);
+        setLoadError(null);
+      })
+      .catch((err) => {
+        if (alive) setLoadError(describeError(err));
+      });
+    const unsubscribe = source.subscribeServices((units) => {
+      if (alive) setServices(units);
+    });
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+  }, [source, retryNonce]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -64,7 +86,8 @@ export function Services() {
 
   function run(unit: ServiceUnit, action: ServiceAction) {
     setBusyAction(action);
-    runServiceAction(unit.name, action)
+    source
+      .runServiceAction(unit.name, action)
       .then((next) => {
         const detail =
           action === 'enable'
@@ -74,7 +97,7 @@ export function Services() {
               : `${next.name} is ${next.state}.`;
         actions.notify(`Service ${ACTION_DONE[action]}`, detail);
       })
-      .catch((err: Error) => actions.notify('Service action failed', err.message))
+      .catch((err) => actions.notify('Service action failed', describeError(err)))
       .finally(() => setBusyAction(null));
   }
 
@@ -113,7 +136,15 @@ export function Services() {
               <span className={`pill pill-${unit.state}`}>{unit.state}</span>
             </button>
           ))}
-          {filtered.length === 0 && <p className="services-empty">No units match this filter.</p>}
+          {loadError && (
+            <p className="services-empty">
+              {loadError}{' '}
+              <button type="button" className="btn" data-testid="services-retry" onClick={() => setRetryNonce((n) => n + 1)}>
+                Retry
+              </button>
+            </p>
+          )}
+          {!loadError && filtered.length === 0 && <p className="services-empty">No units match this filter.</p>}
         </div>
         <aside className="services-detail" aria-label="Service detail">
           {selected ? (
@@ -148,7 +179,8 @@ export function Services() {
                     type="button"
                     className={`btn${action === 'restart' ? ' btn-primary' : ''}`}
                     data-testid={`service-action-${action}`}
-                    disabled={busyAction !== null || !actionAvailable(selected, action)}
+                    disabled={!canAct || busyAction !== null || !actionAvailable(selected, action)}
+                    title={canAct ? undefined : 'Service actions arrive in a later phase of the server'}
                     onClick={() => run(selected, action)}
                   >
                     {busyAction === action ? <span className="spinner" aria-hidden="true" /> : null}
@@ -156,6 +188,11 @@ export function Services() {
                   </button>
                 ))}
               </div>
+              {!canAct && (
+                <p className="services-actions-note" data-testid="services-actions-note">
+                  Service actions arrive in a later phase of the server.
+                </p>
+              )}
             </>
           ) : (
             <p className="services-empty">Select a service to see details.</p>

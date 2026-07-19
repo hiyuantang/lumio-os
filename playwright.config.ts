@@ -11,11 +11,19 @@ export default defineConfig({
     baseURL: 'http://localhost:5199',
     trace: 'retain-on-failure',
   },
-  webServer: {
-    command: 'npm run dev -- --port 5199 --strictPort',
-    url: 'http://localhost:5199',
-    reuseExistingServer: true,
-    timeout: 60_000,
-  },
+  webServer: [
+    {
+      command: 'npm run dev -- --port 5199 --strictPort',
+      url: 'http://localhost:5199',
+      reuseExistingServer: true,
+      timeout: 60_000,
+    },
+    {
+      command: 'npm run dev:live -- --port 5200 --strictPort',
+      url: 'http://localhost:5200',
+      reuseExistingServer: true,
+      timeout: 60_000,
+    },
+  ],
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 });

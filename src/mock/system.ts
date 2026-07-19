@@ -1,45 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { LoadSample, ServiceAction, ServiceUnit, SystemOverview } from '../api/source';
 
-export type ServiceState = 'active' | 'inactive' | 'failed';
-export type ServiceAction = 'start' | 'stop' | 'restart' | 'enable' | 'disable';
-
-export interface ServiceUnit {
-  name: string;
-  description: string;
-  state: ServiceState;
-  enabled: boolean;
-  pid: number | null;
-  memoryMb: number;
-  since: string;
-}
-
-export interface SystemAlert {
-  id: string;
-  level: 'info' | 'warning' | 'critical';
-  text: string;
-}
-
-export interface SystemOverview {
-  hostname: string;
-  os: string;
-  kernel: string;
-  bootedAt: number;
-  cpuPercent: number;
-  memoryUsedMb: number;
-  memoryTotalMb: number;
-  storageUsedGb: number;
-  storageTotalGb: number;
-  pendingUpdates: number;
-  securityUpdates: number;
-  alerts: SystemAlert[];
-  cpuHistory: number[];
-}
-
-export interface LoadSample {
-  cpuPercent: number;
-  netDownKbps: number;
-  netUpKbps: number;
-}
+export type {
+  LoadSample,
+  ServiceAction,
+  ServiceState,
+  ServiceUnit,
+  SystemAlert,
+  SystemOverview,
+} from '../api/source';
 
 const SERVICES: ServiceUnit[] = [
   { name: 'ssh.service', description: 'OpenSSH server daemon', state: 'active', enabled: true, pid: 812, memoryMb: 6, since: 'boot' },
