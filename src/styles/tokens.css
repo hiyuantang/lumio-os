@@ -1,0 +1,91 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+:root {
+  --font-sans: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --accent: #0d7a6d;
+  --accent-strong: #0a5f56;
+  --accent-soft: rgba(13, 122, 109, 0.12);
+  --accent-contrast: #ffffff;
+  --amber: #b45f06;
+  --amber-soft: rgba(180, 95, 6, 0.14);
+  --danger: #b3352b;
+  --danger-soft: rgba(179, 53, 43, 0.12);
+  --ok: #237a3c;
+
+  --surface: #f4f3f0;
+  --surface-raised: #fdfdfc;
+  --surface-sunken: #ebe9e4;
+  --surface-glass: rgba(250, 249, 246, 0.82);
+  --text: #211f1c;
+  --text-muted: #5d574f;
+  --text-faint: #857e74;
+  --border: rgba(33, 31, 28, 0.14);
+  --border-strong: rgba(33, 31, 28, 0.24);
+
+  --wallpaper-1: #dcebe7;
+  --wallpaper-2: #f2ead9;
+  --wallpaper-3: #e6e9ec;
+  --wallpaper-glow-1: rgba(13, 122, 109, 0.16);
+  --wallpaper-glow-2: rgba(180, 95, 6, 0.12);
+
+  --shadow-window: 0 18px 50px rgba(31, 28, 22, 0.22), 0 3px 10px rgba(31, 28, 22, 0.1);
+  --shadow-menu: 0 8px 24px rgba(31, 28, 22, 0.16);
+  --shadow-dock: 0 10px 30px rgba(31, 28, 22, 0.2);
+
+  --radius-s: 6px;
+  --radius-m: 9px;
+  --radius-l: 13px;
+  --radius-window: 12px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --dur-fast: 120ms;
+  --dur-med: 180ms;
+  --ease-out: cubic-bezier(0.22, 0.8, 0.32, 1);
+
+  --menubar-h: 32px;
+  --dock-h: 68px;
+}
+
+[data-theme='dark'] {
+  --accent: #2fbfae;
+  --accent-strong: #52d3c3;
+  --accent-soft: rgba(47, 191, 174, 0.16);
+  --accent-contrast: #10201d;
+  --amber: #e8a04b;
+  --amber-soft: rgba(232, 160, 75, 0.16);
+  --danger: #e57a70;
+  --danger-soft: rgba(229, 122, 112, 0.16);
+  --ok: #5fc47e;
+
+  --surface: #1d1c19;
+  --surface-raised: #272521;
+  --surface-sunken: #161513;
+  --surface-glass: rgba(32, 30, 27, 0.82);
+  --text: #f0ede7;
+  --text-muted: #b3aca1;
+  --text-faint: #8a8378;
+  --border: rgba(240, 237, 231, 0.14);
+  --border-strong: rgba(240, 237, 231, 0.26);
+
+  --wallpaper-1: #17211f;
+  --wallpaper-2: #241f16;
+  --wallpaper-3: #1b1d20;
+  --wallpaper-glow-1: rgba(47, 191, 174, 0.14);
+  --wallpaper-glow-2: rgba(232, 160, 75, 0.1);
+
+  --shadow-window: 0 18px 50px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.32);
+  --shadow-menu: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --shadow-dock: 0 10px 30px rgba(0, 0, 0, 0.46);
+}
+
+.motion-reduced {
+  --dur-fast: 0ms;
+  --dur-med: 0ms;
+}

@@ -60,6 +60,32 @@ required by AGPL-3.0 §13 for modified versions used over a network.
 - Match the style of neighboring files; do not introduce new frameworks
   without checking the project first.
 
+## Development
+
+The repository root is a Vite + React + TypeScript application (strict
+mode, no UI component library, plain CSS with design tokens in
+`src/styles/tokens.css`).
+
+- `npm install` — install dependencies.
+- `npm run dev` — start the dev server.
+- `npm run build` — typecheck (`tsc --noEmit`) and build. Must pass
+  clean before any change is considered done.
+- `npm test` — Playwright smoke tests (chromium only; one-time browser
+  setup via `npx playwright install chromium`).
+
+Layout:
+
+- `src/shell/` — desktop shell (window manager, menu bar, dock, command
+  center, notification center, login).
+- `src/apps/` — applications rendered inside shell windows.
+- `src/mock/` — typed mock system layer. Apps must read system state
+  only through this seam so a real backend can replace it; never call
+  `fetch` directly from components.
+- `tests/` — Playwright specs.
+
+UI checks use `data-testid` hooks; keep existing testids stable and add
+new ones for new interactive elements.
+
 ## Project mission
 
 Build an independent, web-native desktop for administering headless Ubuntu

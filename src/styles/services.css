@@ -1,0 +1,156 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.services {
+  min-height: 0;
+}
+
+.services-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+.services-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.services-list {
+  flex: 1 1 55%;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--border);
+}
+
+.service-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px var(--space-2);
+  border-radius: var(--radius-m);
+  text-align: left;
+}
+
+.service-row:hover {
+  background: var(--surface);
+}
+
+.service-row.selected {
+  background: var(--accent-soft);
+}
+
+.service-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.service-dot.state-active {
+  background: var(--accent);
+}
+
+.service-dot.state-inactive {
+  background: var(--text-faint);
+}
+
+.service-dot.state-failed {
+  background: var(--danger);
+}
+
+.service-names {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.service-name {
+  font-size: 12.5px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.service-row.failed .service-name {
+  color: var(--danger);
+}
+
+.service-desc {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.services-detail {
+  flex: 1 1 45%;
+  min-width: 220px;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.services-detail-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.services-detail-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.services-detail-desc {
+  margin: var(--space-2) 0 var(--space-3);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.services-detail-grid {
+  margin: 0 0 var(--space-4);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  font-size: 12.5px;
+}
+
+.services-detail-grid dt {
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.services-detail-grid dd {
+  margin: 0;
+}
+
+.services-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.services-empty {
+  margin: var(--space-5) var(--space-3);
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+@media (max-width: 700px) {
+  .services-body {
+    flex-direction: column;
+  }
+
+  .services-list {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}

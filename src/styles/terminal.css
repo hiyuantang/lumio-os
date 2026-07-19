@@ -1,0 +1,51 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.terminal {
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  cursor: text;
+}
+
+.terminal-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+
+.terminal-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.terminal-line.input {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.terminal-line.error {
+  color: var(--danger);
+}
+
+.terminal-input-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.terminal-prompt {
+  color: var(--amber);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.terminal-input-row input {
+  flex: 1;
+  border: none;
+  background: none;
+  outline: none;
+  font: inherit;
+  color: var(--text);
+  caret-color: var(--accent);
+}

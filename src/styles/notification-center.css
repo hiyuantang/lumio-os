@@ -1,0 +1,190 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.notifications-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 4400;
+}
+
+.notifications {
+  position: fixed;
+  top: calc(var(--menubar-h) + var(--space-2));
+  right: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 4500;
+  width: min(340px, calc(100vw - 16px));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-glass);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-menu);
+  animation: notifications-in var(--dur-med) var(--ease-out);
+}
+
+@keyframes notifications-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.notifications-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.notifications-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.notifications-clear {
+  font-size: 12px;
+  color: var(--accent);
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-s);
+}
+
+.notifications-clear:hover {
+  background: var(--accent-soft);
+}
+
+.notifications-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.notifications-empty {
+  margin: var(--space-5) var(--space-4);
+  text-align: center;
+  color: var(--text-faint);
+  font-size: 12.5px;
+}
+
+.notification {
+  padding: var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+}
+
+.notification header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.notification strong {
+  font-size: 13px;
+}
+
+.notification time {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.notification p {
+  margin: var(--space-1) 0 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5200;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 18, 15, 0.28);
+}
+
+.shortcuts {
+  width: min(420px, calc(100vw - 32px));
+  background: var(--surface-glass);
+  backdrop-filter: blur(22px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-window);
+  animation: notifications-in var(--dur-med) var(--ease-out);
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.shortcuts-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.shortcuts-close {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+}
+
+.shortcuts-close:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.shortcuts-list {
+  margin: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.shortcuts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.shortcuts-row dt {
+  display: flex;
+  gap: 4px;
+}
+
+.shortcuts-row kbd {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-s);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+}
+
+.shortcuts-row dd {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-align: right;
+}
