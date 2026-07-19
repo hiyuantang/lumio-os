@@ -38,6 +38,12 @@ export interface WireIdentity {
   architecture: string;
   bootId: string;
   serverTime: string;
+  user?: {
+    name: string;
+    uid: string;
+    gid: string;
+    home: string;
+  };
 }
 
 export interface WireOverview {
@@ -123,10 +129,16 @@ export interface WireFileRead {
   truncated: boolean;
 }
 
+export interface WireFileWrite {
+  path: string;
+  revision: string;
+  sizeBytes: number;
+}
+
 export type ServerFrame =
   | { type: 'hello'; protocol: number; serverVersion: string }
   | { type: 'ping'; ts: number }
-  | { type: 'subscribed'; channel: number }
+  | { type: 'subscribed'; channel: number; data?: unknown }
   | { type: 'event'; channel: number; seq: number; data: unknown }
   | { type: 'error'; channel: number; error: WireError }
   | { type: 'closed'; channel: number; error: WireError | null };

@@ -18,6 +18,7 @@ type inFrame struct {
 	Channel    int             `json:"channel"`
 	Capability string          `json:"capability"`
 	Params     json.RawMessage `json:"params"`
+	Data       json.RawMessage `json:"data"`
 }
 
 type eventFrame struct {
@@ -32,6 +33,22 @@ type channel struct {
 	capability string
 	cancel     context.CancelFunc
 	seq        int
+	kill       atomic.Bool
+
+	inputMu sync.Mutex
+	input   func(json.RawMessage)
+}
+
+func (ch *channel) setInput(fn func(json.RawMessage)) {
+	ch.inputMu.Lock()
+	ch.input = fn
+	ch.inputMu.Unlock()
+}
+
+func (ch *channel) getInput() func(json.RawMessage) {
+	ch.inputMu.Lock()
+	defer ch.inputMu.Unlock()
+	return ch.input
 }
 
 type conn struct {
@@ -152,15 +169,19 @@ func (c *conn) readLoop() {
 		case "unsubscribe":
 			c.handleUnsubscribe(f)
 		case "input":
-			c.enqueue(errorFrame(f.Channel, httpapi.NewError(httpapi.CodeValidationFailed, "This capability does not accept input.")))
+			c.handleInput(f)
 		default:
 			c.enqueue(errorFrame(f.Channel, httpapi.NewError(httpapi.CodeValidationFailed, "Unknown frame type.")))
 		}
 	}
 }
 
-func subscribedFrame(id int) any {
-	return map[string]any{"type": "subscribed", "channel": id}
+func subscribedFrame(id int, data any) any {
+	f := map[string]any{"type": "subscribed", "channel": id}
+	if data != nil {
+		f["data"] = data
+	}
+	return f
 }
 
 func errorFrame(id int, err *httpapi.Error) any {
@@ -193,8 +214,8 @@ func (c *conn) handleSubscribe(f inFrame) {
 		return
 	}
 	switch f.Capability {
-	case "system.metrics", "services.subscribe", "journal.stream":
-	case "terminal.open", "updates.progress":
+	case "system.metrics", "services.subscribe", "journal.stream", "terminal.open":
+	case "updates.progress":
 		c.enqueue(errorFrame(f.Channel, httpapi.NewError(httpapi.CodeUnavailable, "This capability is not available in this build.")))
 		return
 	default:
@@ -226,8 +247,25 @@ func (c *conn) handleUnsubscribe(f inFrame) {
 		c.enqueue(errorFrame(f.Channel, httpapi.NewError(httpapi.CodeNotFound, "No such channel.")))
 		return
 	}
+	ch.kill.Store(true)
 	ch.cancel()
 	c.enqueue(closedFrame(f.Channel, nil))
+}
+
+func (c *conn) handleInput(f inFrame) {
+	c.mu.Lock()
+	ch, ok := c.channels[f.Channel]
+	c.mu.Unlock()
+	if !ok {
+		c.enqueue(errorFrame(f.Channel, httpapi.NewError(httpapi.CodeNotFound, "No such channel.")))
+		return
+	}
+	fn := ch.getInput()
+	if fn == nil {
+		c.enqueue(errorFrame(f.Channel, httpapi.NewError(httpapi.CodeValidationFailed, "This capability does not accept input.")))
+		return
+	}
+	fn(f.Data)
 }
 
 func (c *conn) sendEvent(ctx context.Context, ch *channel, data any) bool {
@@ -255,7 +293,11 @@ func (c *conn) trySendEvent(ch *channel, data any) {
 }
 
 func (c *conn) failChannel(ch *channel, err error) {
-	c.enqueue(closedFrame(ch.id, httpapi.MapError(err)))
+	c.closeChannel(ch, httpapi.MapError(err))
+}
+
+func (c *conn) closeChannel(ch *channel, apiErr *httpapi.Error) {
+	c.enqueue(closedFrame(ch.id, apiErr))
 	c.removeChannel(ch.id)
 	ch.cancel()
 }

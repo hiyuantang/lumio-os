@@ -68,9 +68,11 @@ automatic rollback.
 
 ## How to use it
 
-> **Status: Phase 2.** The desktop runs against mock data by default,
-> or against a real Ubuntu host via the read-only Go agent (`lumiod`):
-> live identity, metrics, systemd units, journal and file reads.
+> **Status: Phase 3.** The desktop runs against mock data by default,
+> or against a real Ubuntu host via the Go agent (`lumiod`): live
+> identity, metrics, systemd units and journal, a real PTY terminal
+> (tabs, resize, reattach) running as the service user, and real file
+> browsing/editing with atomic saves, revision conflicts and trash.
 > No authentication yet — the agent binds to localhost; reach it
 > through an SSH tunnel. No installable package yet. The numbered flow
 > below describes the intended experience once the first release ships.

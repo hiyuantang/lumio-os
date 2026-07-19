@@ -3,6 +3,7 @@ package system
 
 import (
 	"os"
+	"os/user"
 	"runtime"
 	"strings"
 	"time"
@@ -15,12 +16,20 @@ type OSInfo struct {
 	Kernel     string `json:"kernel"`
 }
 
+type UserInfo struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+	GID  string `json:"gid"`
+	Home string `json:"home"`
+}
+
 type Identity struct {
-	Hostname     string `json:"hostname"`
-	OS           OSInfo `json:"os"`
-	Architecture string `json:"architecture"`
-	BootID       string `json:"bootId"`
-	ServerTime   string `json:"serverTime"`
+	Hostname     string   `json:"hostname"`
+	OS           OSInfo   `json:"os"`
+	Architecture string   `json:"architecture"`
+	BootID       string   `json:"bootId"`
+	ServerTime   string   `json:"serverTime"`
+	User         UserInfo `json:"user"`
 }
 
 func ReadIdentity() Identity {
@@ -45,7 +54,17 @@ func ReadIdentity() Identity {
 		Architecture: machineArch(),
 		BootID:       readBootID(),
 		ServerTime:   time.Now().UTC().Format(time.RFC3339),
+		User:         currentUser(),
 	}
+}
+
+func currentUser() UserInfo {
+	if u, err := user.Current(); err == nil {
+		return UserInfo{Name: u.Username, UID: u.Uid, GID: u.Gid, Home: u.HomeDir}
+	}
+	name := os.Getenv("USER")
+	home, _ := os.UserHomeDir()
+	return UserInfo{Name: name, Home: home}
 }
 
 func readOSRelease() map[string]string {

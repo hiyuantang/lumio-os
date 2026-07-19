@@ -89,9 +89,34 @@ export interface FsEntry {
 
 export interface FileRead {
   content: string | null;
+  contentBase64: string | null;
   revision: string | null;
   truncated: boolean;
   sizeBytes: number;
+}
+
+export interface FileWrite {
+  revision: string;
+  sizeBytes: number;
+}
+
+export interface TerminalOpenOptions {
+  cols: number;
+  rows: number;
+  user?: string;
+}
+
+export interface TerminalHandlers {
+  onData(data: string): void;
+  onExit(code: number): void;
+  onError?(err: Error): void;
+  onReset?(): void;
+}
+
+export interface TerminalSession {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  close(): void;
 }
 
 export interface SourceCapabilities {
@@ -124,6 +149,10 @@ export interface DataSource {
   homePath(): string[];
   listDir(path: string[]): Promise<FsEntry[]>;
   readFile(path: string[]): Promise<FileRead>;
+  writeFile(path: string[], contentBase64: string, expectedRevision: string | null): Promise<FileWrite>;
+  deleteFile(path: string[]): Promise<void>;
+
+  openTerminal(opts: TerminalOpenOptions, handlers: TerminalHandlers): TerminalSession;
 }
 
 export function describeError(err: unknown): string {

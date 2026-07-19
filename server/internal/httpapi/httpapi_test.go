@@ -3,6 +3,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"lumio-os/server/internal/journal"
@@ -176,7 +178,6 @@ func TestUnavailableEndpoints(t *testing.T) {
 		path   string
 	}{
 		{"POST", "/api/v1/services/action"},
-		{"PUT", "/api/v1/files/write"},
 		{"POST", "/api/v1/updates/refresh"},
 		{"POST", "/api/v1/updates/plan"},
 		{"POST", "/api/v1/updates/apply"},
@@ -228,6 +229,122 @@ func TestFilesEndpoints(t *testing.T) {
 	}
 }
 
+func TestFilesWriteHandler(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/w.txt"
+	ts := testServer(fakeServices{}, fakeJournal{})
+	defer ts.Close()
+
+	put := func(body string) (int, map[string]string, testEnvelope) {
+		req, _ := http.NewRequest("PUT", ts.URL+"/api/v1/files/write", strings.NewReader(body))
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var env testEnvelope
+		_ = json.NewDecoder(res.Body).Decode(&env)
+		headers := map[string]string{}
+		for k := range res.Header {
+			headers[k] = res.Header.Get(k)
+		}
+		return res.StatusCode, headers, env
+	}
+
+	status, _, env := put(`{"path":"` + path + `","content":"` + base64.StdEncoding.EncodeToString([]byte("v1")) + `","requestId":"req-1"}`)
+	if status != 200 || !env.OK {
+		t.Fatalf("write v1: status=%d env=%+v", status, env)
+	}
+	rev1 := jsonField(string(env.Data), "revision")
+	if rev1 == "" {
+		t.Fatalf("no revision in %s", env.Data)
+	}
+
+	status, headers, env2 := put(`{"path":"` + path + `","content":"` + base64.StdEncoding.EncodeToString([]byte("v1")) + `","requestId":"req-1"}`)
+	if status != 200 || headers["X-Lumio-Idempotent-Replay"] != "true" {
+		t.Errorf("replay: status=%d headers=%v", status, headers)
+	}
+	if string(env2.Data) != string(env.Data) {
+		t.Errorf("replay body differs: %s vs %s", env2.Data, env.Data)
+	}
+
+	status, _, env = put(`{"path":"` + path + `","content":"` + base64.StdEncoding.EncodeToString([]byte("v2")) + `","expectedRevision":` + jsonString(rev1) + `,"requestId":"req-2"}`)
+	if status != 200 || !env.OK {
+		t.Fatalf("write v2: status=%d env=%+v", status, env)
+	}
+
+	status, _, env = put(`{"path":"` + path + `","content":"` + base64.StdEncoding.EncodeToString([]byte("v3")) + `","expectedRevision":` + jsonString(rev1) + `,"requestId":"req-3"}`)
+	if status != 409 || env.Error == nil || env.Error.Code != CodeStaleRevision {
+		t.Fatalf("stale: status=%d env=%+v", status, env)
+	}
+	if env.Error.Details["expectedRevision"] != rev1 {
+		t.Errorf("details = %v", env.Error.Details)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "v2" {
+		t.Errorf("file = %q, want v2", data)
+	}
+
+	status, _, env = put(`{"path":"` + path + `","content":"!!!not-base64!!!","requestId":"req-4"}`)
+	if status != 400 || env.Error == nil || env.Error.Code != CodeValidationFailed {
+		t.Errorf("bad base64: status=%d env=%+v", status, env)
+	}
+	status, _, env = put(`{"path":"` + path + `","content":""}`)
+	if status != 400 || env.Error == nil || env.Error.Code != CodeValidationFailed {
+		t.Errorf("missing requestId: status=%d env=%+v", status, env)
+	}
+}
+
+func jsonField(data, field string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(data), &m); err != nil {
+		return ""
+	}
+	s, _ := m[field].(string)
+	return s
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+func TestFilesDeleteHandler(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_DATA_HOME", "")
+	path := home + "/doomed.txt"
+	if err := os.WriteFile(path, []byte("bye"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts := testServer(fakeServices{}, fakeJournal{})
+	defer ts.Close()
+
+	post := func(body string) (int, testEnvelope) {
+		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/files/delete", strings.NewReader(body))
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var env testEnvelope
+		_ = json.NewDecoder(res.Body).Decode(&env)
+		return res.StatusCode, env
+	}
+
+	status, env := post(`{"path":"` + path + `"}`)
+	if status != 400 || env.Error == nil || env.Error.Code != CodeValidationFailed {
+		t.Errorf("missing requestId: status=%d env=%+v", status, env)
+	}
+	status, env = post(`{"path":"` + path + `","requestId":"del-1"}`)
+	if status != 200 || !strings.Contains(string(env.Data), `"trashed":true`) {
+		t.Fatalf("delete: status=%d env=%+v", status, env)
+	}
+	if _, err := os.Lstat(home + "/.local/share/Trash/files/doomed.txt"); err != nil {
+		t.Errorf("trash copy missing: %v", err)
+	}
+}
+
 func TestMapError(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -235,6 +352,7 @@ func TestMapError(t *testing.T) {
 	}{
 		{&os.PathError{Op: "open", Path: "/x", Err: fs.ErrPermission}, CodeForbidden},
 		{&os.PathError{Op: "open", Path: "/x", Err: fs.ErrNotExist}, CodeNotFound},
+		{&os.LinkError{Op: "rename", Old: "/x", New: "/y", Err: syscall.EBUSY}, CodeForbidden},
 		{services.ErrUnavailable, CodeUnavailable},
 		{journal.ErrUnavailable, CodeUnavailable},
 		{journal.ErrValidation, CodeValidationFailed},

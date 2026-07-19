@@ -17,6 +17,7 @@ import (
 	"lumio-os/server/internal/services"
 	"lumio-os/server/internal/static"
 	"lumio-os/server/internal/system"
+	"lumio-os/server/internal/terminal"
 	"lumio-os/server/internal/wsapi"
 )
 
@@ -52,6 +53,7 @@ func main() {
 		Services: svc,
 		Journal:  jb,
 		Sampler:  sampler,
+		Terminal: terminal.NewManager(),
 	})
 
 	api := httpapi.NewServer(httpapi.Deps{

@@ -14,6 +14,7 @@ import (
 	"lumio-os/server/internal/files"
 	"lumio-os/server/internal/journal"
 	"lumio-os/server/internal/services"
+	"lumio-os/server/internal/terminal"
 )
 
 const (
@@ -94,24 +95,50 @@ func MapError(err error) *Error {
 		return apiErr
 	}
 	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
-		details := map[string]any{"path": pathErr.Path}
+	var linkErr *os.LinkError
+	isPathErr := errors.As(err, &pathErr)
+	isLinkErr := errors.As(err, &linkErr)
+	if isPathErr || isLinkErr {
+		path := ""
+		if isPathErr {
+			path = pathErr.Path
+		} else {
+			path = linkErr.Old
+		}
+		details := map[string]any{"path": path}
 		switch {
-		case errors.Is(pathErr.Err, fs.ErrPermission),
-			errors.Is(pathErr.Err, syscall.EACCES),
-			errors.Is(pathErr.Err, syscall.EPERM):
+		case errors.Is(err, fs.ErrPermission),
+			errors.Is(err, syscall.EACCES),
+			errors.Is(err, syscall.EPERM),
+			errors.Is(err, syscall.EBUSY):
 			return &Error{Code: CodeForbidden, Message: "Permission denied.", Details: details}
-		case errors.Is(pathErr.Err, fs.ErrNotExist):
+		case errors.Is(err, fs.ErrNotExist):
 			return &Error{Code: CodeNotFound, Message: "The path does not exist.", Details: details}
 		}
 	}
 	switch {
 	case errors.Is(err, files.ErrValidation), errors.Is(err, journal.ErrValidation):
 		return &Error{Code: CodeValidationFailed, Message: err.Error()}
+	case errors.Is(err, files.ErrStaleRevision):
+		var stale *files.StaleError
+		if errors.As(err, &stale) {
+			return &Error{
+				Code:    CodeStaleRevision,
+				Message: "The file changed on disk since it was read.",
+				Details: map[string]any{"expectedRevision": stale.Expected, "actualRevision": stale.Actual},
+			}
+		}
+		return &Error{Code: CodeStaleRevision, Message: "The file changed on disk since it was read."}
 	case errors.Is(err, services.ErrUnavailable):
 		return &Error{Code: CodeUnavailable, Message: "The systemd D-Bus connection is unavailable on this host."}
 	case errors.Is(err, journal.ErrUnavailable):
 		return &Error{Code: CodeUnavailable, Message: "journalctl is not available on this host."}
+	case errors.Is(err, terminal.ErrNotFound):
+		return &Error{Code: CodeNotFound, Message: "Unknown or expired terminal session."}
+	case errors.Is(err, terminal.ErrConflict):
+		return &Error{Code: CodeConflict, Message: "The terminal session is already attached."}
+	case errors.Is(err, terminal.ErrValidation):
+		return &Error{Code: CodeValidationFailed, Message: err.Error()}
 	case errors.Is(err, context.DeadlineExceeded):
 		return &Error{Code: CodeUnavailable, Message: "The system did not answer in time."}
 	}

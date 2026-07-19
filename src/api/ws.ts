@@ -6,7 +6,13 @@ export interface ChannelSubscription {
   capability: string;
   params: () => Record<string, unknown>;
   onEvent: (data: unknown, seq: number) => void;
+  onSubscribed?: (data: unknown, reattached: boolean) => void;
   onError?: (err: ApiError) => void;
+}
+
+export interface ChannelHandle {
+  channel: number;
+  close: () => void;
 }
 
 function socketUrl(): string {
@@ -24,8 +30,9 @@ export class LumioSocket {
   private reconnectTimer: number | null = null;
   private channels = new Map<number, ChannelSubscription>();
   private lastSeq = new Map<number, number>();
+  private confirmed = new Set<number>();
 
-  subscribe(subscription: ChannelSubscription): () => void {
+  subscribe(subscription: ChannelSubscription): ChannelHandle {
     const channel = this.nextChannel++;
     this.channels.set(channel, subscription);
     if (this.open) {
@@ -33,12 +40,20 @@ export class LumioSocket {
     } else {
       this.ensureConnected();
     }
-    return () => {
-      const known = this.channels.delete(channel);
-      this.lastSeq.delete(channel);
-      if (known && this.open) this.send({ type: 'unsubscribe', channel });
-      if (this.channels.size === 0) this.closeSocket();
+    return {
+      channel,
+      close: () => {
+        const known = this.channels.delete(channel);
+        this.lastSeq.delete(channel);
+        this.confirmed.delete(channel);
+        if (known && this.open) this.send({ type: 'unsubscribe', channel });
+        if (this.channels.size === 0) this.closeSocket();
+      },
     };
+  }
+
+  sendInput(channel: number, data: unknown) {
+    this.send({ type: 'input', channel, data });
   }
 
   private ensureConnected() {
@@ -106,8 +121,14 @@ export class LumioSocket {
       case 'ping':
         this.send({ type: 'pong' });
         return;
-      case 'subscribed':
+      case 'subscribed': {
+        const subscription = this.channels.get(frame.channel);
+        if (!subscription?.onSubscribed) return;
+        const reattached = this.confirmed.has(frame.channel);
+        this.confirmed.add(frame.channel);
+        subscription.onSubscribed(frame.data, reattached);
         return;
+      }
       case 'event':
         this.handleEvent(frame.channel, frame.seq, frame.data);
         return;
@@ -120,6 +141,7 @@ export class LumioSocket {
         const subscription = this.channels.get(frame.channel);
         this.channels.delete(frame.channel);
         this.lastSeq.delete(frame.channel);
+        this.confirmed.delete(frame.channel);
         if (frame.error) {
           subscription?.onError?.(new ApiError(frame.error.code, frame.error.message, frame.error.details ?? {}));
         }

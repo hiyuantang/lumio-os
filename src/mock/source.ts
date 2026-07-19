@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { base64ToText, textToBase64 } from '../api/encoding';
 import type {
   DataSource,
   FileRead,
+  FileWrite,
   FsEntry,
   JournalPage,
   JournalQuery,
@@ -12,9 +14,20 @@ import type {
   SourceCapabilities,
   SystemIdentity,
   SystemOverview,
+  TerminalHandlers,
+  TerminalOpenOptions,
+  TerminalSession,
   Unsubscribe,
 } from '../api/source';
-import { getEntry, homePath as mockHomePath, listDir as mockListDir } from './filesystem';
+import { ApiError } from '../api/transport';
+import {
+  deleteEntry,
+  entryRevision,
+  getEntry,
+  homePath as mockHomePath,
+  listDir as mockListDir,
+  writeEntry,
+} from './filesystem';
 import { LOG_UNITS, makeLogLine, seedLogLines } from './journal';
 import {
   getOverview,
@@ -24,6 +37,7 @@ import {
   subscribeServices,
   uptimeSeconds,
 } from './system';
+import { MockTerminalSession } from './terminal';
 
 const TICK_MS = 2000;
 
@@ -33,7 +47,7 @@ export class MockDataSource implements DataSource {
     isLive: false,
     canServiceActions: true,
     canTerminal: true,
-    canWriteFiles: false,
+    canWriteFiles: true,
   };
 
   async getIdentity(): Promise<SystemIdentity> {
@@ -103,11 +117,27 @@ export class MockDataSource implements DataSource {
 
   async readFile(path: string[]): Promise<FileRead> {
     const entry = getEntry(path);
+    if (!entry || entry.kind !== 'file') {
+      throw new ApiError('not_found', 'No such file.');
+    }
     return {
-      content: entry?.kind === 'file' ? (entry.content ?? null) : null,
-      revision: null,
+      content: entry.content ?? null,
+      contentBase64: entry.content != null ? textToBase64(entry.content) : null,
+      revision: entryRevision(path),
       truncated: false,
-      sizeBytes: entry?.size ?? 0,
+      sizeBytes: entry.size,
     };
+  }
+
+  async writeFile(path: string[], contentBase64: string, expectedRevision: string | null): Promise<FileWrite> {
+    return writeEntry(path, base64ToText(contentBase64), expectedRevision);
+  }
+
+  async deleteFile(path: string[]): Promise<void> {
+    deleteEntry(path);
+  }
+
+  openTerminal(opts: TerminalOpenOptions, handlers: TerminalHandlers): TerminalSession {
+    return new MockTerminalSession(opts, handlers);
   }
 }

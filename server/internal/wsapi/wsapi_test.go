@@ -3,9 +3,11 @@ package wsapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"lumio-os/server/internal/journal"
 	"lumio-os/server/internal/services"
 	"lumio-os/server/internal/system"
+	"lumio-os/server/internal/terminal"
 )
 
 type fakeServices struct{ available bool }
@@ -90,6 +93,7 @@ func newTestHub() *Hub {
 		Services: fakeServices{available: false},
 		Journal:  fakeJournal{},
 		Sampler:  system.NewSampler(),
+		Terminal: terminal.NewManager(),
 	})
 }
 
@@ -135,12 +139,17 @@ func TestUnavailableCapability(t *testing.T) {
 	ws, cleanup := dial(t, newTestHub(), nil)
 	defer cleanup()
 	readFrame(t, ws)
-	subscribe(t, ws, 3, "terminal.open", `{}`)
+	subscribe(t, ws, 3, "terminal.open", `{"session":"no-such-token"}`)
 	f := readFrame(t, ws)
+	if f.Type != "error" || f.Error == nil || f.Error.Code != "not_found" {
+		t.Fatalf("frame = %+v", f)
+	}
+	subscribe(t, ws, 4, "updates.progress", `{}`)
+	f = readFrame(t, ws)
 	if f.Type != "error" || f.Error == nil || f.Error.Code != "unavailable" {
 		t.Fatalf("frame = %+v", f)
 	}
-	subscribe(t, ws, 4, "bogus.cap", `{}`)
+	subscribe(t, ws, 5, "bogus.cap", `{}`)
 	f = readFrame(t, ws)
 	if f.Type != "error" || f.Error == nil || f.Error.Code != "validation_failed" {
 		t.Fatalf("frame = %+v", f)
@@ -207,6 +216,78 @@ func TestUnsubscribe(t *testing.T) {
 			t.Fatalf("frame = %+v", f)
 		}
 		return
+	}
+}
+
+func TestTerminalFlow(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	ws, cleanup := dial(t, newTestHub(), nil)
+	defer cleanup()
+	readFrame(t, ws)
+	subscribe(t, ws, 9, "terminal.open", `{"cols":80,"rows":24,"shell":"/bin/sh"}`)
+	f := readFrame(t, ws)
+	if f.Type != "subscribed" {
+		t.Fatalf("frame = %+v", f)
+	}
+	var subData struct {
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(f.Data, &subData); err != nil || subData.Session == "" {
+		t.Fatalf("subscribed data = %s err=%v", f.Data, err)
+	}
+	sendInput := func(v map[string]any) {
+		b, _ := json.Marshal(map[string]any{"type": "input", "channel": 9, "data": v})
+		if err := ws.WriteMessage(websocket.TextMessage, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+	sendInput(map[string]any{"kind": "stdin", "data": base64.StdEncoding.EncodeToString([]byte("echo ws-term-ok\n"))})
+
+	var output strings.Builder
+	sawExit := false
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = ws.SetReadDeadline(time.Now().Add(8 * time.Second))
+		f := readFrame(t, ws)
+		if f.Type != "event" {
+			continue
+		}
+		var data struct {
+			Kind string `json:"kind"`
+			Data string `json:"data"`
+			Code int    `json:"code"`
+		}
+		if err := json.Unmarshal(f.Data, &data); err != nil {
+			t.Fatalf("bad event: %v", err)
+		}
+		switch data.Kind {
+		case "stdout":
+			decoded, err := base64.StdEncoding.DecodeString(data.Data)
+			if err != nil {
+				t.Fatalf("bad base64: %v", err)
+			}
+			output.Write(decoded)
+			if strings.Contains(output.String(), "ws-term-ok") {
+				sendInput(map[string]any{"kind": "resize", "cols": 132, "rows": 43})
+				time.Sleep(300 * time.Millisecond)
+				sendInput(map[string]any{"kind": "stdin", "data": base64.StdEncoding.EncodeToString([]byte("exit\n"))})
+			}
+		case "exit":
+			sawExit = true
+		}
+		if sawExit {
+			break
+		}
+	}
+	if !sawExit {
+		t.Fatalf("no exit event; output so far: %q", output.String())
+	}
+	f = readFrame(t, ws)
+	if f.Type != "closed" || f.Channel != 9 || f.Error != nil {
+		t.Fatalf("expected clean close, got %+v", f)
 	}
 }
 

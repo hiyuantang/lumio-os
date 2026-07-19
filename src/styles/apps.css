@@ -137,3 +137,15 @@
 .mono {
   font-family: var(--font-mono);
 }
+
+.btn-danger {
+  background: var(--danger);
+  border-color: transparent;
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: transparent;
+  filter: brightness(1.08);
+}

@@ -5,6 +5,9 @@
 subset of [../docs/PROTOCOL.md](../docs/PROTOCOL.md): REST endpoints for
 system identity, overview, services, journal and files, plus the WebSocket
 channel model (`system.metrics`, `services.subscribe`, `journal.stream`).
+Phase 3 adds the `terminal.open` PTY channel (with session tokens and
+120 s reattach grace), `PUT /api/v1/files/write` (atomic, revision-checked)
+and `POST /api/v1/files/delete` (freedesktop trash).
 
 Phase 2 runs gateway and agent as one process bound to `127.0.0.1`; the
 multi-process split (gateway / per-user agent / privileged broker) arrives
@@ -17,6 +20,7 @@ is a wiring change, not a rewrite. Request handling is centralized in
 
 - `github.com/gorilla/websocket` — WebSocket transport.
 - `github.com/godbus/dbus/v5` — systemd D-Bus client.
+- `github.com/creack/pty` — PTY allocation for the terminal channel.
 
 No other third-party dependencies; the module builds cgo-free.
 
@@ -112,7 +116,45 @@ than 404, per PROTOCOL.md's capability table.
 
 `docker/lumiod.service` starts lumiod with `-addr 0.0.0.0:8080` only so the
 Docker port forward used by the integration test can reach it. The default
-remains `127.0.0.1:8080` everywhere else.
+remains `127.0.0.1:8080` everywhere else. The container also runs lumiod as
+the unprivileged `lumio` user (member of `systemd-journal` so the journal
+stays readable); this mirrors the production posture.
+
+### Terminal sessions
+
+- `terminal.open` returns an opaque `session` token in the `subscribed`
+  frame's `data` (additive protocol extension, documented in
+  docs/PROTOCOL.md).
+- Scrollback is capped at 64 KiB per session and replayed on reattach.
+- On socket drop the PTY survives for 120 s; an explicit `unsubscribe`
+  kills it immediately.
+- The shell is `$SHELL` (fallback `/bin/sh`) with a clean environment
+  (`TERM=xterm-256color`, `COLORTERM=truecolor`, minimal PATH/HOME/USER).
+- Test-client note: input written while the shell's line discipline is
+  still initializing can be eaten by the tty; `cmd/wscheck` waits 500 ms
+  after `subscribed` before typing. Real clients (xterm.js) are driven by
+  human keystrokes and never hit this.
+
+### files.write / files.delete
+
+- Atomic save: temp file in the same directory, fsync, existing mode and
+  ownership preserved, rename, directory fsync. New files are `0644`.
+- `expectedRevision` compares against the current `sha256:` revision;
+  mismatch → `stale_revision` with `details.expectedRevision` /
+  `actualRevision`. A precondition on a missing file → `not_found`.
+- Decoded content cap is 8 MiB; the transport's 1 MiB REST body limit is
+  overridden to 12 MiB for this route only (documented in PROTOCOL.md).
+- Writes and deletes on the same resolved path are serialized by a
+  per-path lock.
+- `files.delete` moves to `~/.local/share/Trash/{files,info}` per the
+  freedesktop trash spec (same-filesystem renames only; `EXDEV` and an
+  unwritable trash → `validation_failed`). No permanent delete in Phase 3.
+
+### Idempotency
+
+`requestId` dedup is an in-memory store (24 h TTL, swept on insert).
+It does not survive restarts — acceptable for Phase 3; Phase 4's audit
+log will persist it.
 
 ### Metrics notes
 
@@ -131,11 +173,12 @@ remains `127.0.0.1:8080` everywhere else.
 cmd/lumiod/      main + flags
 cmd/wscheck/     WS assertion client used by the integration test
 internal/config/ flag parsing
-internal/httpapi REST routing, envelopes, error-code mapping
+internal/httpapi REST routing, envelopes, error-code mapping, idempotency
 internal/wsapi/  WS hub: hello/ping/pong, multiplexed numbered channels
 internal/system/ identity, overview, metrics sampler (/proc, statfs)
 internal/services systemd D-Bus client + change watcher (signals + 10 s poll)
 internal/journal/ journal.Backend interface + journalctl CLI implementation
-internal/files/  path cleaning, symlink resolution, list/read with revision
+internal/files/  path cleaning, list/read, atomic write, freedesktop trash
+internal/terminal/ PTY session manager (tokens, scrollback, 120 s grace)
 internal/static/ embedded dist (webdist tag) + SPA fallback + -web dir
 ```

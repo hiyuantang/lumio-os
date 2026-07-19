@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { base64ToText, textToBase64 } from './encoding';
 import type {
   WireFileEntry,
   WireFileRead,
   WireFilesList,
+  WireFileWrite,
   WireIdentity,
   WireJournalEntry,
   WireJournalPage,
@@ -15,6 +17,7 @@ import type {
 import type {
   DataSource,
   FileRead,
+  FileWrite,
   FsEntry,
   JournalPage,
   JournalQuery,
@@ -26,9 +29,12 @@ import type {
   SourceCapabilities,
   SystemIdentity,
   SystemOverview,
+  TerminalHandlers,
+  TerminalOpenOptions,
+  TerminalSession,
   Unsubscribe,
 } from './source';
-import { apiGet, apiPost } from './transport';
+import { apiGet, apiPost, apiPut } from './transport';
 import { LumioSocket } from './ws';
 
 const MB = 1024 * 1024;
@@ -115,14 +121,9 @@ function sortEntries(a: FsEntry, b: FsEntry): number {
   return a.name.localeCompare(b.name);
 }
 
-function decodeBase64(b64: string): string {
-  const binary = atob(b64);
-  const bytes = Uint8Array.from(binary, (ch) => ch.charCodeAt(0));
-  return new TextDecoder('utf-8').decode(bytes);
-}
-
-function toAbsolutePath(path: string[]): string {
-  return `/${['home', ...path].join('/')}`;
+function joinUnderHome(homeDir: string, path: string[]): string {
+  const rest = path.slice(1).join('/');
+  return rest ? `${homeDir}/${rest}` : homeDir;
 }
 
 export class LiveDataSource implements DataSource {
@@ -130,12 +131,13 @@ export class LiveDataSource implements DataSource {
   readonly capabilities: SourceCapabilities = {
     isLive: true,
     canServiceActions: false,
-    canTerminal: false,
-    canWriteFiles: false,
+    canTerminal: true,
+    canWriteFiles: true,
   };
 
   private socket = new LumioSocket();
   private identity: SystemIdentity | null = null;
+  private homeDir = '/home/user';
   private bootedAt = Date.now();
   private lastMetrics: WireMetricsSample | null = null;
   private cpuHistory: number[] = [];
@@ -152,6 +154,10 @@ export class LiveDataSource implements DataSource {
         bootId: data.bootId,
         serverTime: data.serverTime,
       };
+      const home = data.user?.home;
+      if (home && home.startsWith('/')) {
+        this.homeDir = home.replace(/\/+$/, '') || '/';
+      }
     }
     return this.identity;
   }
@@ -211,7 +217,7 @@ export class LiveDataSource implements DataSource {
   }
 
   subscribeMetrics(onSample: (sample: LoadSample) => void, intervalMs = 2000): Unsubscribe {
-    return this.socket.subscribe({
+    const handle = this.socket.subscribe({
       capability: 'system.metrics',
       params: () => ({ intervalMs }),
       onEvent: (data) => {
@@ -220,6 +226,7 @@ export class LiveDataSource implements DataSource {
         onSample(mapMetricsSample(sample));
       },
     });
+    return handle.close;
   }
 
   private noteMetrics(sample: WireMetricsSample) {
@@ -236,7 +243,7 @@ export class LiveDataSource implements DataSource {
   }
 
   subscribeServices(onChange: (units: ServiceUnit[]) => void): Unsubscribe {
-    return this.socket.subscribe({
+    const handle = this.socket.subscribe({
       capability: 'services.subscribe',
       params: () => ({}),
       onEvent: (data) => {
@@ -258,6 +265,7 @@ export class LiveDataSource implements DataSource {
         onChange([...this.units.values()].map(mapServiceUnit).sort((a, b) => a.name.localeCompare(b.name)));
       },
     });
+    return handle.close;
   }
 
   async runServiceAction(name: string, action: ServiceAction): Promise<ServiceUnit> {
@@ -289,7 +297,7 @@ export class LiveDataSource implements DataSource {
         if (oldest !== undefined) seen.delete(oldest);
       }
     };
-    return this.socket.subscribe({
+    const handle = this.socket.subscribe({
       capability: 'journal.stream',
       params: () => ({ after: lastCursor }),
       onEvent: (data) => {
@@ -303,6 +311,7 @@ export class LiveDataSource implements DataSource {
       },
       onError: (err) => onError?.(err),
     });
+    return handle.close;
   }
 
   async listJournalUnits(): Promise<string[]> {
@@ -311,17 +320,102 @@ export class LiveDataSource implements DataSource {
   }
 
   homePath(): string[] {
-    return ['user'];
+    const segment = this.homeDir.split('/').filter(Boolean).pop();
+    return [segment ?? 'user'];
   }
 
   async listDir(path: string[]): Promise<FsEntry[]> {
-    const data = await apiGet<WireFilesList>('/files/list', { path: toAbsolutePath(path) });
+    const data = await apiGet<WireFilesList>('/files/list', { path: joinUnderHome(this.homeDir, path) });
     return data.entries.map(mapFileEntry).sort(sortEntries);
   }
 
   async readFile(path: string[]): Promise<FileRead> {
-    const data = await apiGet<WireFileRead>('/files/read', { path: toAbsolutePath(path) });
-    const content = data.encoding === 'utf-8' || data.encoding === 'ascii' ? decodeBase64(data.content) : null;
-    return { content, revision: data.revision, truncated: data.truncated, sizeBytes: data.sizeBytes };
+    const data = await apiGet<WireFileRead>('/files/read', { path: joinUnderHome(this.homeDir, path) });
+    const content = data.encoding === 'utf-8' || data.encoding === 'ascii' ? base64ToText(data.content) : null;
+    return {
+      content,
+      contentBase64: data.content,
+      revision: data.revision,
+      truncated: data.truncated,
+      sizeBytes: data.sizeBytes,
+    };
+  }
+
+  async writeFile(path: string[], contentBase64: string, expectedRevision: string | null): Promise<FileWrite> {
+    const data = await apiPut<WireFileWrite>('/files/write', {
+      path: joinUnderHome(this.homeDir, path),
+      content: contentBase64,
+      ...(expectedRevision ? { expectedRevision } : {}),
+      requestId: crypto.randomUUID(),
+    });
+    return { revision: data.revision, sizeBytes: data.sizeBytes };
+  }
+
+  async deleteFile(path: string[]): Promise<void> {
+    await apiPost<{ trashed: boolean }>('/files/delete', {
+      path: joinUnderHome(this.homeDir, path),
+      requestId: crypto.randomUUID(),
+    });
+  }
+
+  openTerminal(opts: TerminalOpenOptions, handlers: TerminalHandlers): TerminalSession {
+    return new LiveTerminalSession(this.socket, opts, handlers);
+  }
+}
+
+class LiveTerminalSession implements TerminalSession {
+  private cols: number;
+  private rows: number;
+  private sessionToken: string | null = null;
+  private exited = false;
+  private handle: { channel: number; close: () => void };
+
+  constructor(
+    private socket: LumioSocket,
+    opts: TerminalOpenOptions,
+    private handlers: TerminalHandlers,
+  ) {
+    this.cols = opts.cols;
+    this.rows = opts.rows;
+    this.handle = this.socket.subscribe({
+      capability: 'terminal.open',
+      params: () => ({
+        cols: this.cols,
+        rows: this.rows,
+        shell: null,
+        ...(this.sessionToken ? { session: this.sessionToken } : {}),
+      }),
+      onSubscribed: (data, reattached) => {
+        const token = (data as { session?: unknown } | undefined)?.session;
+        if (typeof token === 'string') this.sessionToken = token;
+        if (reattached) this.handlers.onReset?.();
+      },
+      onEvent: (data) => {
+        const frame = data as { kind?: string; data?: string; code?: number };
+        if (frame.kind === 'stdout' && typeof frame.data === 'string') {
+          this.handlers.onData(base64ToText(frame.data));
+        } else if (frame.kind === 'exit') {
+          this.exited = true;
+          this.handlers.onExit(typeof frame.code === 'number' ? frame.code : 0);
+        }
+      },
+      onError: (err) => this.handlers.onError?.(err),
+    });
+  }
+
+  write(data: string): void {
+    if (this.exited) return;
+    this.socket.sendInput(this.handle.channel, { kind: 'stdin', data: textToBase64(data) });
+  }
+
+  resize(cols: number, rows: number): void {
+    if (this.exited || (cols === this.cols && rows === this.rows)) return;
+    this.cols = cols;
+    this.rows = rows;
+    this.socket.sendInput(this.handle.channel, { kind: 'resize', cols, rows });
+  }
+
+  close(): void {
+    this.handle.close();
   }
 }

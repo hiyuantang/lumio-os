@@ -1,78 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { getDataSource } from '../api/source';
-import { homePath, listDir } from '../mock/filesystem';
-import { uptimeSeconds } from '../mock/system';
+import { useEffect, useRef, useState } from 'react';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal as XTerm, type ITheme } from '@xterm/xterm';
+import { describeError, getDataSource } from '../api/source';
 import { useShell } from '../shell/ShellContext';
+import '@xterm/xterm/css/xterm.css';
 import '../styles/terminal.css';
 
-interface TermLine {
+interface TabState {
   id: number;
-  kind: 'input' | 'output' | 'error';
-  text: string;
+  epoch: number;
+  exitCode: number | null;
+  error: string | null;
 }
 
-const PROMPT = 'user@atlas:~$';
+let nextTabId = 1;
 
-let lineId = 1;
-
-function evaluate(raw: string, ctx: { user: string }): { out: string[]; clear?: boolean; exit?: boolean } {
-  const trimmed = raw.trim();
-  if (!trimmed) return { out: [] };
-  const [cmd, ...args] = trimmed.split(/\s+/);
-  switch (cmd) {
-    case 'help':
-      return {
-        out: [
-          'Available commands:',
-          '  help              show this help',
-          '  ls                list files in the home directory',
-          '  pwd               print working directory',
-          '  whoami            print the current user',
-          '  uname -a          print system information',
-          '  uptime            show how long the system has been up',
-          '  echo [text]       print text',
-          '  clear             clear the screen',
-          '  exit              close this terminal',
-        ],
-      };
-    case 'ls':
-      return { out: [listDir(homePath()).map((e) => e.name).join('  ')] };
-    case 'pwd':
-      return { out: ['/home/user'] };
-    case 'whoami':
-      return { out: [ctx.user] };
-    case 'uname': {
-      const all = args.includes('-a');
-      return {
-        out: [
-          all
-            ? 'Linux atlas 6.8.0-45-generic #45-Ubuntu SMP x86_64 x86_64 GNU/Linux'
-            : 'Linux',
-        ],
-      };
-    }
-    case 'uptime': {
-      const s = uptimeSeconds();
-      const days = Math.floor(s / 86400);
-      const hours = Math.floor((s % 86400) / 3600);
-      const minutes = Math.floor((s % 3600) / 60);
-      const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      return {
-        out: [
-          ` ${now} up ${days} days, ${hours}:${String(minutes).padStart(2, '0')}, 1 user, load average: 0.42, 0.31, 0.28`,
-        ],
-      };
-    }
-    case 'echo':
-      return { out: [args.join(' ')] };
-    case 'clear':
-      return { out: [], clear: true };
-    case 'exit':
-      return { out: [], exit: true };
-    default:
-      return { out: [`lumio-sh: command not found: ${cmd}`] };
-  }
+function readTheme(): ITheme {
+  const styles = getComputedStyle(document.documentElement);
+  const v = (name: string, fallback: string) => styles.getPropertyValue(name).trim() || fallback;
+  return {
+    background: v('--surface-sunken', '#161513'),
+    foreground: v('--text', '#f0ede7'),
+    cursor: v('--accent', '#2fbfae'),
+    selectionBackground: v('--accent-soft', 'rgba(47, 191, 174, 0.16)'),
+  };
 }
 
 export function Terminal() {
@@ -82,102 +34,174 @@ export function Terminal() {
       <div className="app terminal" data-testid="app-terminal">
         <div className="terminal-placeholder">
           <p className="terminal-placeholder-title">Terminal</p>
-          <p>A live terminal session arrives in a later phase of the server.</p>
+          <p>Terminal is not available from this server.</p>
         </div>
       </div>
     );
   }
-  return <MockTerminal />;
+  return <TerminalTabs />;
 }
 
-function MockTerminal() {
+function TerminalTabs() {
   const { state, actions } = useShell();
   const user = state.user ?? 'user';
-  const [lines, setLines] = useState<TermLine[]>([
-    { id: lineId++, kind: 'output', text: "Lumio OS mock shell — no commands leave this window. Type 'help'." },
-  ]);
-  const [input, setInput] = useState('');
-  const [history, setHistory] = useState<string[]>([]);
-  const [histIdx, setHistIdx] = useState(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [tabs, setTabs] = useState<TabState[]>(() => [{ id: nextTabId++, epoch: 0, exitCode: null, error: null }]);
+  const [activeId, setActiveId] = useState<number | null>(null);
+  const effectiveActive = tabs.some((tab) => tab.id === activeId) ? activeId : (tabs[0]?.id ?? null);
 
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [lines]);
+  function updateTab(id: number, patch: Partial<TabState>) {
+    setTabs((prev) => prev.map((tab) => (tab.id === id ? { ...tab, ...patch } : tab)));
+  }
 
-  function submit() {
-    const result = evaluate(input, { user });
-    if (result.exit) {
+  function addTab() {
+    const id = nextTabId++;
+    setTabs((prev) => [...prev, { id, epoch: 0, exitCode: null, error: null }]);
+    setActiveId(id);
+  }
+
+  function closeTab(id: number) {
+    if (tabs.length === 1 && tabs[0].id === id) {
       actions.closeApp('terminal');
       return;
     }
-    if (result.clear) {
-      setLines([]);
-    } else {
-      setLines((prev) => [
-        ...prev,
-        { id: lineId++, kind: 'input', text: `${PROMPT} ${input}` },
-        ...result.out.map((text) => ({ id: lineId++, kind: 'output' as const, text })),
-      ]);
-    }
-    if (input.trim()) {
-      setHistory((prev) => [...prev, input]);
-    }
-    setInput('');
-    setHistIdx(-1);
-  }
-
-  function onKeyDown(e: ReactKeyboardEvent<HTMLInputElement>) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      submit();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (history.length === 0) return;
-      const next = histIdx === -1 ? history.length - 1 : Math.max(0, histIdx - 1);
-      setHistIdx(next);
-      setInput(history[next]);
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (histIdx === -1) return;
-      const next = histIdx + 1;
-      if (next >= history.length) {
-        setHistIdx(-1);
-        setInput('');
-      } else {
-        setHistIdx(next);
-        setInput(history[next]);
-      }
-    }
+    setTabs((prev) => prev.filter((tab) => tab.id !== id));
   }
 
   return (
-    <div className="app terminal" data-testid="app-terminal" onClick={() => inputRef.current?.focus()}>
-      <div className="terminal-scroll" ref={scrollRef}>
-        {lines.map((line) => (
-          <div key={line.id} className={`terminal-line ${line.kind}`}>
-            {line.text}
+    <div className="app terminal" data-testid="app-terminal">
+      <div className="terminal-tabs" role="tablist" aria-label="Terminal tabs">
+        {tabs.map((tab, index) => (
+          <div
+            key={tab.id}
+            className={`terminal-tab${tab.id === effectiveActive ? ' active' : ''}`}
+            role="tab"
+            aria-selected={tab.id === effectiveActive}
+            data-testid={`terminal-tab-${tab.id}`}
+          >
+            <button type="button" className="terminal-tab-label" onClick={() => setActiveId(tab.id)}>
+              {tab.exitCode !== null ? 'exited' : 'shell'} {index + 1}
+            </button>
+            <button
+              type="button"
+              className="terminal-tab-close"
+              aria-label={`Close tab ${index + 1}`}
+              data-testid={`terminal-close-tab-${tab.id}`}
+              onClick={() => closeTab(tab.id)}
+            >
+              ×
+            </button>
           </div>
         ))}
-        <div className="terminal-input-row">
-          <span className="terminal-prompt">{PROMPT}</span>
-          <input
-            ref={inputRef}
-            data-testid="terminal-input"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            aria-label="Terminal input"
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            autoFocus
-          />
-        </div>
+        <button type="button" className="terminal-tab-new" data-testid="terminal-new-tab" aria-label="New tab" onClick={addTab}>
+          +
+        </button>
       </div>
+      <div className="terminal-panes">
+        {tabs.map((tab) => (
+          <TerminalPane
+            key={`${tab.id}:${tab.epoch}`}
+            tab={tab}
+            user={user}
+            visible={tab.id === effectiveActive}
+            onExit={(code) => updateTab(tab.id, { exitCode: code })}
+            onError={(message) => updateTab(tab.id, { error: message })}
+            onRestart={() => updateTab(tab.id, { epoch: tab.epoch + 1, exitCode: null, error: null })}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+interface PaneProps {
+  tab: TabState;
+  user: string;
+  visible: boolean;
+  onExit: (code: number) => void;
+  onError: (message: string) => void;
+  onRestart: () => void;
+}
+
+function TerminalPane({ tab, user, visible, onExit, onError, onRestart }: PaneProps) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<XTerm | null>(null);
+  const callbacksRef = useRef({ onExit, onError });
+  callbacksRef.current = { onExit, onError };
+  const { resolvedTheme } = useShell();
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const term = new XTerm({
+      fontFamily: 'var(--font-mono)',
+      fontSize: 12.5,
+      cursorBlink: true,
+      theme: readTheme(),
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(host);
+    termRef.current = term;
+    const safeFit = () => {
+      if (host.clientWidth === 0 || host.clientHeight === 0) return;
+      fit.fit();
+    };
+    safeFit();
+    term.focus();
+
+    const session = getDataSource().openTerminal(
+      { cols: term.cols, rows: term.rows, user },
+      {
+        onData: (data) => term.write(data),
+        onExit: (code) => callbacksRef.current.onExit(code),
+        onError: (err) => callbacksRef.current.onError(describeError(err)),
+        onReset: () => term.reset(),
+      },
+    );
+    const inputSub = term.onData((data) => session.write(data));
+    const resizeSub = term.onResize(({ cols, rows }) => session.resize(cols, rows));
+    const observer = new ResizeObserver(safeFit);
+    observer.observe(host);
+    return () => {
+      observer.disconnect();
+      inputSub.dispose();
+      resizeSub.dispose();
+      session.close();
+      term.dispose();
+      termRef.current = null;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (term) term.options.theme = readTheme();
+  }, [resolvedTheme]);
+
+  useEffect(() => {
+    const textarea = hostRef.current?.querySelector('textarea');
+    if (textarea) {
+      if (visible) textarea.setAttribute('data-testid', 'terminal-input');
+      else textarea.removeAttribute('data-testid');
+    }
+    if (visible) termRef.current?.focus();
+  }, [visible]);
+
+  return (
+    <div className={`terminal-pane${visible ? '' : ' hidden'}`}>
+      <div className="terminal-host" ref={hostRef} />
+      {tab.error && (
+        <div className="terminal-error" data-testid="terminal-error" role="alert">
+          {tab.error}
+        </div>
+      )}
+      {tab.exitCode !== null && (
+        <div className="terminal-exited" data-testid="terminal-exited">
+          <p>Process exited{tab.exitCode !== 0 ? ` (code ${tab.exitCode})` : ''}.</p>
+          <button type="button" className="btn" data-testid="terminal-restart" onClick={onRestart}>
+            Restart
+          </button>
+        </div>
+      )}
     </div>
   );
 }

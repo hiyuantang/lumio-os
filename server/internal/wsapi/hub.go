@@ -11,6 +11,7 @@ import (
 	"lumio-os/server/internal/journal"
 	"lumio-os/server/internal/services"
 	"lumio-os/server/internal/system"
+	"lumio-os/server/internal/terminal"
 )
 
 const (
@@ -25,6 +26,7 @@ type Deps struct {
 	Services services.API
 	Journal  journal.Backend
 	Sampler  *system.Sampler
+	Terminal *terminal.Manager
 }
 
 type Hub struct {

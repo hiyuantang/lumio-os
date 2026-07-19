@@ -185,3 +185,103 @@
   color: var(--text-faint);
   font-size: 12.5px;
 }
+
+.quicklook-actions {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.file-editor {
+  width: min(640px, calc(100vw - 48px));
+  height: min(520px, calc(100vh - 96px));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-glass);
+  backdrop-filter: blur(22px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-window);
+  overflow: hidden;
+  animation: quicklook-in var(--dur-med) var(--ease-out);
+}
+
+.file-editor-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.file-editor-conflict {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.file-editor-conflict p {
+  flex: 1;
+  min-width: 200px;
+}
+
+.file-editor-conflict-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.file-editor-error {
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--danger);
+  font-size: 12.5px;
+}
+
+.file-editor-input {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  border: none;
+  outline: none;
+  resize: none;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.file-editor-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.file-confirm {
+  width: min(360px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface-glass);
+  backdrop-filter: blur(22px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-window);
+  font-size: 13px;
+  animation: quicklook-in var(--dur-med) var(--ease-out);
+}
+
+.file-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}

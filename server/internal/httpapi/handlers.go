@@ -3,6 +3,8 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -112,6 +114,63 @@ func (s *Server) handleFilesRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteData(w, res)
+}
+
+func (s *Server) handleFilesWrite(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path             string `json:"path"`
+		Content          string `json:"content"`
+		ExpectedRevision string `json:"expectedRevision"`
+		RequestID        string `json:"requestId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return
+	}
+	content, err := base64.StdEncoding.DecodeString(req.Content)
+	if err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "content must be base64."))
+		return
+	}
+	if len(content) > files.MaxWriteBytes {
+		WriteError(w, NewError(CodeValidationFailed, "content exceeds the 8 MiB limit for files.write."))
+		return
+	}
+	s.mutate(w, req.RequestID, func(w http.ResponseWriter) {
+		res, err := files.Write(req.Path, content, req.ExpectedRevision)
+		if err != nil {
+			WriteError(w, err)
+			return
+		}
+		WriteData(w, res)
+	})
+}
+
+func (s *Server) handleFilesDelete(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path      string `json:"path"`
+		RequestID string `json:"requestId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return
+	}
+	s.mutate(w, req.RequestID, func(w http.ResponseWriter) {
+		res, err := files.Trash(req.Path)
+		if err != nil {
+			WriteError(w, err)
+			return
+		}
+		WriteData(w, res)
+	})
 }
 
 func (s *Server) handleUnavailable(w http.ResponseWriter, _ *http.Request) {

@@ -96,3 +96,7 @@ export async function apiGet<T>(path: string, params?: QueryParams): Promise<T> 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return rawRequest<T>('POST', path, undefined, body);
 }
+
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  return rawRequest<T>('PUT', path, undefined, body);
+}

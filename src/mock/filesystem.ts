@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { FsEntry } from '../api/source';
+import { ApiError } from '../api/transport';
 
 export type { FsEntry } from '../api/source';
 
@@ -134,6 +135,83 @@ export function listDir(path: string[]): FsEntry[] {
     if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
+}
+
+const revisions = new Map<string, string>();
+let revisionCounter = 0;
+
+function pathKey(path: string[]): string {
+  return path.join('/');
+}
+
+export function entryRevision(path: string[]): string | null {
+  const node = getEntry(path);
+  if (!node || node.kind !== 'file') return null;
+  const key = pathKey(path);
+  let revision = revisions.get(key);
+  if (!revision) {
+    revision = `mock-${++revisionCounter}`;
+    revisions.set(key, revision);
+  }
+  return revision;
+}
+
+function formatModified(date: Date): string {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${months[date.getMonth()]} ${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function writeEntry(
+  path: string[],
+  content: string,
+  expectedRevision: string | null,
+): { revision: string; sizeBytes: number } {
+  const name = path[path.length - 1];
+  const parent = getEntry(path.slice(0, -1));
+  if (!name || !parent || parent.kind !== 'dir') {
+    throw new ApiError('not_found', 'The parent folder does not exist.');
+  }
+  const existing = parent.children?.find((c) => c.name === name);
+  if (existing?.kind === 'dir') {
+    throw new ApiError('validation_failed', 'Cannot overwrite a folder.');
+  }
+  if (existing && expectedRevision !== null) {
+    const actualRevision = entryRevision(path);
+    if (actualRevision !== expectedRevision) {
+      throw new ApiError('stale_revision', 'The file changed on disk since it was read.', {
+        expectedRevision,
+        actualRevision,
+      });
+    }
+  }
+  const sizeBytes = new TextEncoder().encode(content).length;
+  const modified = formatModified(new Date());
+  if (existing) {
+    existing.content = content;
+    existing.size = sizeBytes;
+    existing.modified = modified;
+  } else {
+    parent.children?.push({ name, kind: 'file', size: sizeBytes, modified, content });
+  }
+  const revision = `mock-${++revisionCounter}`;
+  revisions.set(pathKey(path), revision);
+  return { revision, sizeBytes };
+}
+
+export function deleteEntry(path: string[]): void {
+  const parent = getEntry(path.slice(0, -1));
+  const name = path[path.length - 1];
+  const index = parent?.children?.findIndex((c) => c.name === name) ?? -1;
+  const node = index >= 0 ? parent?.children?.[index] : undefined;
+  if (!parent || parent.kind !== 'dir' || !node) {
+    throw new ApiError('not_found', 'No such file.');
+  }
+  if (node.kind === 'dir' && (node.children?.length ?? 0) > 0) {
+    throw new ApiError('validation_failed', 'Only empty folders can be moved to trash.');
+  }
+  parent.children?.splice(index, 1);
+  revisions.delete(pathKey(path));
 }
 
 export function formatSize(bytes: number): string {
