@@ -149,3 +149,33 @@
   border-color: transparent;
   filter: brightness(1.08);
 }
+
+.quicklook-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3500;
+  display: grid;
+  place-items: center;
+  background: rgba(20, 18, 15, 0.22);
+}
+
+.file-confirm {
+  width: min(360px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface-glass);
+  backdrop-filter: blur(22px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-window);
+  font-size: 13px;
+  animation: quicklook-in var(--dur-med) var(--ease-out);
+}
+
+.file-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}

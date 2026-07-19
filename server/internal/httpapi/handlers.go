@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
+	"lumio-os/server/internal/broker"
 	"lumio-os/server/internal/files"
 	"lumio-os/server/internal/journal"
 	"lumio-os/server/internal/services"
@@ -171,6 +173,67 @@ func (s *Server) handleFilesDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		WriteData(w, res)
 	})
+}
+
+var actionNamePattern = regexp.MustCompile(`^(start|stop|restart|enable|disable)$`)
+var actionUnitPattern = regexp.MustCompile(`^[a-zA-Z0-9@:._\-]+\.service$`)
+
+func (s *Server) handleServicesAction(w http.ResponseWriter, r *http.Request) {
+	if s.deps.BrokerSocket == "" {
+		WriteError(w, NewError(CodeUnavailable, "This capability is not available in this build."))
+		return
+	}
+	var req struct {
+		RequestID string `json:"requestId"`
+		Action    string `json:"action"`
+		Unit      string `json:"unit"`
+		Expected  *struct {
+			ActiveState string `json:"activeState"`
+		} `json:"expected"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return
+	}
+	if !actionNamePattern.MatchString(req.Action) {
+		WriteError(w, NewError(CodeValidationFailed, "unknown action."))
+		return
+	}
+	if !actionUnitPattern.MatchString(req.Unit) {
+		WriteError(w, NewError(CodeValidationFailed, "invalid unit name."))
+		return
+	}
+	payload := map[string]any{
+		"requestId":    req.RequestID,
+		"action":       "services." + req.Action,
+		"arguments":    map[string]any{"unit": req.Unit},
+		"sessionToken": r.Header.Get("X-Lumio-Session"),
+	}
+	if req.Expected != nil {
+		payload["expected"] = req.Expected
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		WriteError(w, NewError(CodeInternal, "Internal server error."))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	status, headers, body, err := broker.CallAction(ctx, s.deps.BrokerSocket, encoded)
+	if err != nil {
+		WriteError(w, NewError(CodeUnavailable, "The privileged broker is unavailable."))
+		return
+	}
+	if replay := headers.Get("X-Lumio-Idempotent-Replay"); replay != "" {
+		w.Header().Set("X-Lumio-Idempotent-Replay", replay)
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
 func (s *Server) handleUnavailable(w http.ResponseWriter, _ *http.Request) {

@@ -11,6 +11,7 @@ import type {
   LogLine,
   ServiceAction,
   ServiceUnit,
+  SessionUser,
   SourceCapabilities,
   SystemIdentity,
   SystemOverview,
@@ -49,6 +50,22 @@ export class MockDataSource implements DataSource {
     canTerminal: true,
     canWriteFiles: true,
   };
+
+  async login(username: string): Promise<SessionUser> {
+    return { name: username, home: '/home/user' };
+  }
+
+  async logout(): Promise<void> {}
+
+  async getSession(): Promise<SessionUser | null> {
+    return null;
+  }
+
+  async reauth(): Promise<void> {}
+
+  onSessionExpired(): Unsubscribe {
+    return () => {};
+  }
 
   async getIdentity(): Promise<SystemIdentity> {
     const overview = getOverview();

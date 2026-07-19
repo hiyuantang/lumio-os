@@ -107,6 +107,12 @@ function fulfillFailure(route: Route, code: string, status: number) {
 }
 
 async function stubRest(page: Page) {
+  await page.route('**/api/v1/auth/login', (route) =>
+    fulfillData(route, { user: { name: 'demo', uid: 1000, gid: 1000, home: '/home/user' }, csrf: 'test-csrf' }),
+  );
+  await page.route('**/api/v1/auth/session', (route) => fulfillFailure(route, 'unauthorized', 401));
+  await page.route('**/api/v1/auth/logout', (route) => fulfillData(route, {}));
+  await page.route('**/api/v1/auth/reauth', (route) => fulfillData(route, { reauthenticatedUntil: Date.now() + 600_000 }));
   await page.route('**/api/v1/system/identity', (route) => fulfillData(route, IDENTITY));
   await page.route('**/api/v1/system/overview', (route) => fulfillData(route, OVERVIEW));
   await page.route('**/api/v1/system/metrics', (route) => fulfillData(route, METRICS));
@@ -141,8 +147,8 @@ test('live mode: home, services, logs and terminal placeholder render from REST 
   await expect(services.getByTestId('service-row-nginx.service')).toBeVisible();
   await expect(services.getByTestId('service-row-backup.service')).toBeVisible();
   await services.getByTestId('service-row-nginx.service').click();
-  await expect(services.getByTestId('service-action-restart')).toBeDisabled();
-  await expect(services.getByTestId('services-actions-note')).toBeVisible();
+  await expect(services.getByTestId('service-action-restart')).toBeEnabled();
+  await expect(services.getByTestId('services-actions-note')).toHaveCount(0);
 
   await page.getByTestId('dock-app-logs').click();
   const logs = page.getByTestId('app-logs');
@@ -417,4 +423,175 @@ test('live mode: delete asks for confirmation and removes the row', async ({ pag
   expect(deletes).toHaveLength(1);
   expect(deletes[0].path).toBe('/home/user/notes.txt');
   expect(deletes[0].requestId).toBeTruthy();
+});
+
+test('live mode: bad credentials show a calm error and stay on the login screen', async ({ page }) => {
+  await stubRest(page);
+  await page.route('**/api/v1/auth/login', (route) => fulfillFailure(route, 'unauthorized', 401));
+  await page.goto(LIVE);
+  await page.getByTestId('login-username').fill('demo');
+  await page.getByTestId('login-password').fill('wrong');
+  await page.getByTestId('login-submit').click();
+  await expect(page.getByTestId('login-error')).toHaveText('Incorrect username or password.');
+  await expect(page.getByTestId('login-screen')).toBeVisible();
+});
+
+test('live mode: an existing session skips the login screen', async ({ page }) => {
+  await stubRest(page);
+  await page.route('**/api/v1/auth/session', (route) =>
+    fulfillData(route, { user: { name: 'demo', uid: 1000, gid: 1000, home: '/home/user' } }),
+  );
+  await page.goto(LIVE);
+  await expect(page.getByTestId('menu-bar')).toBeVisible();
+  await expect(page.getByTestId('login-screen')).toHaveCount(0);
+});
+
+test('live mode: logging out calls the server and returns to the login screen', async ({ page }) => {
+  await stubRest(page);
+  let logoutCalls = 0;
+  await page.route('**/api/v1/auth/logout', async (route) => {
+    logoutCalls += 1;
+    await fulfillData(route, {});
+  });
+  await login(page);
+  await page.getByTestId('menu-bar').locator('[data-menu-button="user"]').click();
+  await page.getByTestId('logout-button').click();
+  await expect(page.getByTestId('login-screen')).toBeVisible();
+  expect(logoutCalls).toBe(1);
+});
+
+test('live mode: an expired session returns to the login screen', async ({ page }) => {
+  await stubRest(page);
+  let expired = false;
+  await page.route('**/api/v1/system/overview', async (route) => {
+    if (expired) await fulfillFailure(route, 'unauthorized', 401);
+    else await fulfillData(route, OVERVIEW);
+  });
+  await login(page);
+  await page.getByTestId('dock-app-home').click();
+  await expect(page.getByTestId('app-home')).toContainText('atlas-live');
+  expired = true;
+  await expect(page.getByTestId('login-screen')).toBeVisible({ timeout: 10_000 });
+});
+
+test('live mode: service restart sends expected state and the CSRF header', async ({ page }) => {
+  await stubRest(page);
+  const calls: { body: { action?: string; unit?: string; requestId?: string; expected?: { activeState?: string } }; csrf: string | undefined }[] = [];
+  await page.route('**/api/v1/services/action', async (route) => {
+    calls.push({
+      body: route.request().postDataJSON() as (typeof calls)[number]['body'],
+      csrf: route.request().headers()['x-lumio-csrf'],
+    });
+    await fulfillData(route, {
+      unit: { name: 'nginx.service', activeState: 'active', subState: 'running', enabledState: 'enabled' },
+    });
+  });
+  await login(page);
+
+  await page.getByTestId('dock-app-services').click();
+  const services = page.getByTestId('app-services');
+  await services.getByTestId('service-row-nginx.service').click();
+  await services.getByTestId('service-action-restart').click();
+
+  await expect(page.getByTestId('notifications-badge')).toHaveText('1', { timeout: 5_000 });
+  expect(calls).toHaveLength(1);
+  expect(calls[0].body.action).toBe('restart');
+  expect(calls[0].body.unit).toBe('nginx.service');
+  expect(calls[0].body.expected?.activeState).toBe('active');
+  expect(calls[0].body.requestId).toBeTruthy();
+  expect(calls[0].csrf).toBe('test-csrf');
+});
+
+test('live mode: conflict refreshes the list and notifies calmly', async ({ page }) => {
+  await stubRest(page);
+  let listCalls = 0;
+  await page.route('**/api/v1/services', async (route) => {
+    listCalls += 1;
+    await fulfillData(route, SERVICES);
+  });
+  await page.route('**/api/v1/services/action', (route) => fulfillFailure(route, 'conflict', 409));
+  await login(page);
+
+  await page.getByTestId('dock-app-services').click();
+  const services = page.getByTestId('app-services');
+  await services.getByTestId('service-row-nginx.service').click();
+  const before = listCalls;
+  await services.getByTestId('service-action-restart').click();
+
+  await expect(page.getByTestId('notifications-badge')).toHaveText('1', { timeout: 5_000 });
+  await expect.poll(() => listCalls, { timeout: 5_000 }).toBe(before + 1);
+});
+
+test('live mode: stop asks for confirmation before acting', async ({ page }) => {
+  await stubRest(page);
+  let actionCalls = 0;
+  await page.route('**/api/v1/services/action', async (route) => {
+    actionCalls += 1;
+    await fulfillData(route, {
+      unit: { name: 'nginx.service', activeState: 'inactive', subState: 'dead', enabledState: 'enabled' },
+    });
+  });
+  await login(page);
+
+  await page.getByTestId('dock-app-services').click();
+  const services = page.getByTestId('app-services');
+  await services.getByTestId('service-row-nginx.service').click();
+  await services.getByTestId('service-action-stop').click();
+
+  await expect(page.getByTestId('service-confirm')).toBeVisible();
+  expect(actionCalls).toBe(0);
+  await page.getByTestId('service-confirm-ok').click();
+  await expect(page.getByTestId('notifications-badge')).toHaveText('1', { timeout: 5_000 });
+  expect(actionCalls).toBe(1);
+});
+
+test('live mode: reauth sheet appears on reauthRequired and retries after success', async ({ page }) => {
+  await stubRest(page);
+  let actionCalls = 0;
+  let reauthCalls = 0;
+  await page.route('**/api/v1/services/action', async (route) => {
+    actionCalls += 1;
+    if (actionCalls === 1) {
+      await route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: false,
+          error: { code: 'forbidden', message: 'reauthentication required', details: { reauthRequired: true } },
+        }),
+      });
+      return;
+    }
+    await fulfillData(route, {
+      unit: { name: 'nginx.service', activeState: 'active', subState: 'running', enabledState: 'enabled' },
+    });
+  });
+  await page.route('**/api/v1/auth/reauth', async (route) => {
+    reauthCalls += 1;
+    const body = route.request().postDataJSON() as { password?: string };
+    if (body.password === 'wrong') {
+      await fulfillFailure(route, 'unauthorized', 401);
+      return;
+    }
+    await fulfillData(route, { reauthenticatedUntil: Date.now() + 600_000 });
+  });
+  await login(page);
+
+  await page.getByTestId('dock-app-services').click();
+  const services = page.getByTestId('app-services');
+  await services.getByTestId('service-row-nginx.service').click();
+  await services.getByTestId('service-action-restart').click();
+
+  const sheet = page.getByTestId('reauth-sheet');
+  await expect(sheet).toBeVisible();
+  await sheet.getByTestId('reauth-password').fill('wrong');
+  await sheet.getByTestId('reauth-submit').click();
+  await expect(page.getByTestId('reauth-error')).toHaveText('Incorrect password.');
+
+  await sheet.getByTestId('reauth-password').fill('demo');
+  await sheet.getByTestId('reauth-submit').click();
+  await expect(sheet).toHaveCount(0);
+  await expect(page.getByTestId('notifications-badge')).toHaveText('1', { timeout: 5_000 });
+  expect(actionCalls).toBe(2);
+  expect(reauthCalls).toBe(2);
 });

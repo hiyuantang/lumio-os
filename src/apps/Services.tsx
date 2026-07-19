@@ -3,9 +3,12 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   describeError,
   getDataSource,
+  isReauthRequired,
   type ServiceAction,
   type ServiceUnit,
 } from '../api/source';
+import { ApiError } from '../api/transport';
+import { useReauth } from '../shell/ReauthSheet';
 import { useShell } from '../shell/ShellContext';
 import { IconSearch } from '../shell/icons';
 import '../styles/apps.css';
@@ -45,6 +48,7 @@ function actionAvailable(unit: ServiceUnit, action: ServiceAction): boolean {
 export function Services() {
   const { actions } = useShell();
   const source = getDataSource();
+  const requireReauth = useReauth();
   const canAct = source.capabilities.canServiceActions;
   const [services, setServices] = useState<ServiceUnit[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -52,6 +56,7 @@ export function Services() {
   const [query, setQuery] = useState('');
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState<ServiceAction | null>(null);
+  const [confirm, setConfirm] = useState<{ unit: ServiceUnit; action: ServiceAction } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -87,7 +92,7 @@ export function Services() {
   function run(unit: ServiceUnit, action: ServiceAction) {
     setBusyAction(action);
     source
-      .runServiceAction(unit.name, action)
+      .runServiceAction(unit.name, action, unit.state)
       .then((next) => {
         const detail =
           action === 'enable'
@@ -97,8 +102,27 @@ export function Services() {
               : `${next.name} is ${next.state}.`;
         actions.notify(`Service ${ACTION_DONE[action]}`, detail);
       })
-      .catch((err) => actions.notify('Service action failed', describeError(err)))
+      .catch((err) => {
+        if (isReauthRequired(err)) {
+          requireReauth(() => run(unit, action));
+          return;
+        }
+        if (err instanceof ApiError && err.code === 'conflict') {
+          void source
+            .listServices()
+            .then((units) => setServices(units))
+            .catch(() => {});
+          actions.notify('Service state changed', `${unit.name} was refreshed from the live system.`);
+          return;
+        }
+        actions.notify('Service action failed', describeError(err));
+      })
       .finally(() => setBusyAction(null));
+  }
+
+  function request(unit: ServiceUnit, action: ServiceAction) {
+    if (action === 'stop' || action === 'disable') setConfirm({ unit, action });
+    else run(unit, action);
   }
 
   return (
@@ -181,7 +205,7 @@ export function Services() {
                     data-testid={`service-action-${action}`}
                     disabled={!canAct || busyAction !== null || !actionAvailable(selected, action)}
                     title={canAct ? undefined : 'Service actions arrive in a later phase of the server'}
-                    onClick={() => run(selected, action)}
+                    onClick={() => request(selected, action)}
                   >
                     {busyAction === action ? <span className="spinner" aria-hidden="true" /> : null}
                     {busyAction === action ? 'Working…' : ACTION_LABEL[action]}
@@ -199,6 +223,42 @@ export function Services() {
           )}
         </aside>
       </div>
+
+      {confirm && (
+        <div className="quicklook-overlay" onPointerDown={() => setConfirm(null)}>
+          <div
+            className="file-confirm"
+            role="alertdialog"
+            aria-modal="true"
+            aria-label={`${ACTION_LABEL[confirm.action]} ${confirm.unit.name}`}
+            data-testid="service-confirm"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <p>
+              {confirm.action === 'stop'
+                ? `Stop ${confirm.unit.name}? Running processes will be terminated.`
+                : `Disable ${confirm.unit.name}? It will no longer start at boot.`}
+            </p>
+            <div className="file-confirm-actions">
+              <button type="button" className="btn" data-testid="service-confirm-cancel" onClick={() => setConfirm(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                data-testid="service-confirm-ok"
+                onClick={() => {
+                  const pending = confirm;
+                  setConfirm(null);
+                  run(pending.unit, pending.action);
+                }}
+              >
+                {ACTION_LABEL[confirm.action]}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

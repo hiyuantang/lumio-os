@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { base64ToText, textToBase64 } from './encoding';
 import type {
+  WireAuthLogin,
+  WireAuthSession,
   WireFileEntry,
   WireFileRead,
   WireFilesList,
@@ -10,9 +12,12 @@ import type {
   WireJournalPage,
   WireMetricsSample,
   WireOverview,
+  WireReauth,
+  WireServiceActionResult,
   WireServicesEvent,
   WireServicesList,
   WireServiceUnit,
+  WireSessionUser,
 } from './protocol';
 import type {
   DataSource,
@@ -26,6 +31,7 @@ import type {
   LogPriority,
   ServiceAction,
   ServiceUnit,
+  SessionUser,
   SourceCapabilities,
   SystemIdentity,
   SystemOverview,
@@ -34,7 +40,7 @@ import type {
   TerminalSession,
   Unsubscribe,
 } from './source';
-import { apiGet, apiPost, apiPut } from './transport';
+import { ApiError, apiGet, apiPost, apiPut, csrfToken, onSessionExpired as onSessionExpiredListener } from './transport';
 import { LumioSocket } from './ws';
 
 const MB = 1024 * 1024;
@@ -130,7 +136,7 @@ export class LiveDataSource implements DataSource {
   readonly kind = 'live' as const;
   readonly capabilities: SourceCapabilities = {
     isLive: true,
-    canServiceActions: false,
+    canServiceActions: true,
     canTerminal: true,
     canWriteFiles: true,
   };
@@ -142,6 +148,43 @@ export class LiveDataSource implements DataSource {
   private lastMetrics: WireMetricsSample | null = null;
   private cpuHistory: number[] = [];
   private units = new Map<string, WireServiceUnit>();
+
+  async login(username: string, password: string): Promise<SessionUser> {
+    const data = await apiPost<WireAuthLogin>('/auth/login', { username, password });
+    if (data.csrf && !csrfToken()) {
+      document.cookie = `lumio_csrf=${encodeURIComponent(data.csrf)}; path=/; SameSite=Strict`;
+    }
+    return this.noteSessionUser(data.user);
+  }
+
+  async logout(): Promise<void> {
+    await apiPost('/auth/logout', {});
+  }
+
+  async getSession(): Promise<SessionUser | null> {
+    try {
+      const data = await apiGet<WireAuthSession>('/auth/session');
+      return this.noteSessionUser(data.user);
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'unauthorized') return null;
+      throw err;
+    }
+  }
+
+  async reauth(password: string): Promise<void> {
+    await apiPost<WireReauth>('/auth/reauth', { password });
+  }
+
+  onSessionExpired(listener: () => void): Unsubscribe {
+    return onSessionExpiredListener(listener);
+  }
+
+  private noteSessionUser(user: WireSessionUser): SessionUser {
+    if (user.home && user.home.startsWith('/')) {
+      this.homeDir = user.home.replace(/\/+$/, '') || '/';
+    }
+    return { name: user.name, uid: user.uid, gid: user.gid, home: user.home };
+  }
 
   async getIdentity(): Promise<SystemIdentity> {
     if (!this.identity) {
@@ -268,13 +311,24 @@ export class LiveDataSource implements DataSource {
     return handle.close;
   }
 
-  async runServiceAction(name: string, action: ServiceAction): Promise<ServiceUnit> {
-    const data = await apiPost<WireServiceUnit>('/services/action', {
+  async runServiceAction(name: string, action: ServiceAction, expectedActiveState?: string): Promise<ServiceUnit> {
+    const data = await apiPost<WireServiceActionResult>('/services/action', {
       requestId: crypto.randomUUID(),
-      action: `services.${action}`,
-      arguments: { unit: name },
+      action,
+      unit: name,
+      ...(expectedActiveState ? { expected: { activeState: expectedActiveState } } : {}),
     });
-    return mapServiceUnit(data);
+    const fallback: WireServiceUnit = this.units.get(name) ?? {
+      name,
+      description: '',
+      loadState: 'loaded',
+      activeState: 'inactive',
+      subState: 'dead',
+      enabledState: 'disabled',
+    };
+    const merged = { ...fallback, ...data.unit };
+    this.units.set(name, merged);
+    return mapServiceUnit(merged);
   }
 
   async queryJournal(query: JournalQuery = {}): Promise<JournalPage> {

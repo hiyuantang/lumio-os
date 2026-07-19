@@ -21,10 +21,30 @@ import (
 	"lumio-os/server/internal/wsapi"
 )
 
-var version = "0.2.0"
+var version = "0.4.0"
 
 func main() {
-	cfg, err := config.Parse(os.Args[1:])
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "gateway":
+			runGateway(os.Args[2:])
+			return
+		case "sessiond":
+			runSessiond(os.Args[2:])
+			return
+		case "agent":
+			runAgent(os.Args[2:])
+			return
+		case "broker":
+			runBroker(os.Args[2:])
+			return
+		}
+	}
+	runLegacy(os.Args[1:])
+}
+
+func runLegacy(args []string) {
+	cfg, err := config.Parse(args)
 	if err != nil {
 		os.Exit(2)
 	}
@@ -80,7 +100,7 @@ func main() {
 		_ = srv.Shutdown(ctx)
 	}()
 
-	log.Printf("lumiod %s listening on %s", version, cfg.Addr)
+	log.Printf("lumiod %s listening on %s (single-process mode)", version, cfg.Addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("listen: %v", err)
 	}

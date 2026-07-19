@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 
@@ -32,6 +33,11 @@ type Deps struct {
 type Hub struct {
 	deps     Deps
 	upgrader websocket.Upgrader
+	conns    atomic.Int32
+}
+
+func (h *Hub) Connections() int32 {
+	return h.conns.Load()
 }
 
 func NewHub(deps Deps) *Hub {
@@ -51,6 +57,8 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c := newConn(ws, h)
+	h.conns.Add(1)
+	defer h.conns.Add(-1)
 	c.enqueue(map[string]any{
 		"type":          "hello",
 		"protocol":      1,

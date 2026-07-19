@@ -16,12 +16,13 @@ const (
 )
 
 type Deps struct {
-	Version  string
-	Sampler  *system.Sampler
-	Services services.API
-	Journal  journal.Backend
-	WS       http.Handler
-	Static   http.Handler
+	Version      string
+	Sampler      *system.Sampler
+	Services     services.API
+	Journal      journal.Backend
+	WS           http.Handler
+	Static       http.Handler
+	BrokerSocket string
 }
 
 type Server struct {
@@ -45,7 +46,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/files/read", s.handleFilesRead)
 	mux.HandleFunc("PUT /api/v1/files/write", s.handleFilesWrite)
 	mux.HandleFunc("POST /api/v1/files/delete", s.handleFilesDelete)
-	mux.HandleFunc("POST /api/v1/services/action", s.handleUnavailable)
+	mux.HandleFunc("POST /api/v1/services/action", s.handleServicesAction)
 	mux.HandleFunc("POST /api/v1/updates/refresh", s.handleUnavailable)
 	mux.HandleFunc("POST /api/v1/updates/plan", s.handleUnavailable)
 	mux.HandleFunc("POST /api/v1/updates/apply", s.handleUnavailable)

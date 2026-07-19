@@ -7,6 +7,7 @@ import {
   useReducer,
   type ReactNode,
 } from 'react';
+import { getDataSource } from '../api/source';
 import { APPS, APP_ORDER, type AppId } from '../apps/registry';
 
 export interface Rect {
@@ -43,6 +44,7 @@ interface Viewport {
 
 interface ShellState {
   user: string | null;
+  authReady: boolean;
   windows: Partial<Record<AppId, WindowState>>;
   zTop: number;
   focused: AppId | null;
@@ -59,6 +61,7 @@ interface ShellState {
 type Action =
   | { type: 'login'; user: string }
   | { type: 'logout' }
+  | { type: 'auth-ready' }
   | { type: 'open-app'; appId: AppId }
   | { type: 'close-app'; appId: AppId }
   | { type: 'close-focused' }
@@ -109,7 +112,17 @@ function reducer(state: ShellState, action: Action): ShellState {
     case 'login':
       return { ...state, user: action.user };
     case 'logout':
-      return { ...state, user: null, paletteOpen: false, notifOpen: false, shortcutsOpen: false };
+      return {
+        ...state,
+        user: null,
+        windows: {},
+        focused: null,
+        paletteOpen: false,
+        notifOpen: false,
+        shortcutsOpen: false,
+      };
+    case 'auth-ready':
+      return { ...state, authReady: true };
     case 'open-app': {
       const existing = state.windows[action.appId];
       const z = state.zTop + 1;
@@ -268,6 +281,7 @@ function reducer(state: ShellState, action: Action): ShellState {
 function initState(): ShellState {
   const session = loadJSON<{ user: string }>(SESSION_KEY);
   const prefs = loadJSON<{ theme: ThemePref; motion: MotionPref }>(PREFS_KEY);
+  const isLive = getDataSource().capabilities.isLive;
   const stored = loadJSON<{
     windows: Partial<Record<AppId, WindowState>>;
     zTop: number;
@@ -284,7 +298,8 @@ function initState(): ShellState {
     }
   }
   return {
-    user: session?.user ?? null,
+    user: isLive ? null : (session?.user ?? null),
+    authReady: !isLive,
     windows,
     zTop: stored?.zTop ?? 0,
     focused: stored?.focused && windows[stored.focused] ? stored.focused : null,
@@ -333,6 +348,31 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const systemReduced = useMediaQuery('(prefers-reduced-motion: reduce)');
   const resolvedTheme: 'light' | 'dark' = state.theme ?? (systemDark ? 'dark' : 'light');
   const reducedMotion = state.motion === 'reduced' || (state.motion === 'system' && systemReduced);
+
+  useEffect(() => {
+    const source = getDataSource();
+    if (!source.capabilities.isLive) return;
+    let alive = true;
+    source
+      .getSession()
+      .then((user) => {
+        if (!alive) return;
+        if (user) dispatch({ type: 'login', user: user.name });
+        dispatch({ type: 'auth-ready' });
+      })
+      .catch(() => {
+        if (alive) dispatch({ type: 'auth-ready' });
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const source = getDataSource();
+    if (!source.capabilities.isLive) return;
+    return source.onSessionExpired(() => dispatch({ type: 'logout' }));
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
@@ -397,7 +437,17 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const actions = useMemo<ShellActions>(
     () => ({
       login: (user) => dispatch({ type: 'login', user }),
-      logout: () => dispatch({ type: 'logout' }),
+      logout: () => {
+        const source = getDataSource();
+        if (source.capabilities.isLive) {
+          void source
+            .logout()
+            .catch(() => {})
+            .finally(() => dispatch({ type: 'logout' }));
+        } else {
+          dispatch({ type: 'logout' });
+        }
+      },
       openApp: (appId) => dispatch({ type: 'open-app', appId }),
       closeApp: (appId) => dispatch({ type: 'close-app', appId }),
       focusApp: (appId) => dispatch({ type: 'focus-app', appId }),

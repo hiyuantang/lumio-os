@@ -277,6 +277,12 @@ func (m *Manager) Attach(token string) (*Session, *Attachment, error) {
 	return s, att, nil
 }
 
+func (m *Manager) Count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sessions)
+}
+
 func resolveShell(requested string) (string, error) {
 	if requested == "" {
 		if shell := os.Getenv("SHELL"); shell != "" {

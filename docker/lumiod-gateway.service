@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Lumio OS web gateway
+After=lumiod-sessiond.service lumiod-broker.service
+Wants=lumiod-sessiond.service lumiod-broker.service
+
+[Service]
+Type=simple
+User=lumio-gw
+ExecStart=/usr/local/bin/lumiod gateway -addr 0.0.0.0:8080
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

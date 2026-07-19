@@ -1,13 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # lumiod — Lumio OS Phase 2 read-only Ubuntu agent
 
-`lumiod` is a single, unprivileged Go binary that implements the Phase 2
-subset of [../docs/PROTOCOL.md](../docs/PROTOCOL.md): REST endpoints for
-system identity, overview, services, journal and files, plus the WebSocket
-channel model (`system.metrics`, `services.subscribe`, `journal.stream`).
-Phase 3 adds the `terminal.open` PTY channel (with session tokens and
-120 s reattach grace), `PUT /api/v1/files/write` (atomic, revision-checked)
-and `POST /api/v1/files/delete` (freedesktop trash).
+`lumiod` is a single Go binary implementing the Lumio OS server stack from
+[../docs/PROTOCOL.md](../docs/PROTOCOL.md). Phase 4 splits it into the
+documented multi-process architecture via subcommands:
+
+```
+lumiod gateway    HTTP/WS + auth + CSRF, unprivileged user (lumio-gw)
+lumiod sessiond   root: PAM login, session store, spawns per-user agents
+lumiod agent      the logged-in user: metrics, services, journal, files, PTY
+lumiod broker     root: typed privileged actions (polkit + audit)
+```
+
+Processes talk over Unix sockets under `/run/lumio` (see
+[../docs/PRIVILEGE_MODEL.md](../docs/PRIVILEGE_MODEL.md) §As built).
+Running `lumiod` with no subcommand keeps the Phase 2/3 single-process
+mode (no auth) for frontend development.
 
 Phase 2 runs gateway and agent as one process bound to `127.0.0.1`; the
 multi-process split (gateway / per-user agent / privileged broker) arrives
@@ -19,12 +27,16 @@ is a wiring change, not a rewrite. Request handling is centralized in
 ## Dependencies
 
 - `github.com/gorilla/websocket` — WebSocket transport.
-- `github.com/godbus/dbus/v5` — systemd D-Bus client.
+- `github.com/godbus/dbus/v5` — systemd and polkit D-Bus client.
 - `github.com/creack/pty` — PTY allocation for the terminal channel.
-
-No other third-party dependencies; the module builds cgo-free.
+- `modernc.org/sqlite` — pure-Go SQLite for the broker audit log.
+- `github.com/msteinert/pam/v2` — PAM authentication, **only** under the
+  `pam` build tag (cgo, Linux). Without the tag the build is cgo-free
+  and PAM calls answer `unavailable`; see `-insecure-dev-auth` below.
 
 ## Run on macOS (development)
+
+Single-process mode (no auth, Phase 2/3 surface):
 
 ```sh
 cd server
@@ -32,26 +44,32 @@ go build -o lumiod ./cmd/lumiod
 ./lumiod -addr 127.0.0.1:8080
 ```
 
-systemd and journald do not exist on macOS: `/api/v1/services`,
-`services.subscribe` and the journal capabilities answer with the
-`unavailable` error shape while identity, metrics (zeroed `/proc` fields),
-and files keep working.
-
-Flags:
-
-- `-addr` — listen address, default `127.0.0.1:8080`.
-- `-web` — serve the frontend from a directory (e.g. `-web ../dist`).
-  Without it the binary serves embedded assets when built with
-  `-tags webdist`, otherwise `/` answers 404 with a hint.
-
-## Run on Ubuntu
+Full multi-process dev stack with dev auth (login as your macOS user
+with any password; loud startup warning; **never** for production and
+never settable via config file or environment in packaged units):
 
 ```sh
-./lumiod -addr 127.0.0.1:8080
+./lumiod sessiond -run-dir /tmp/lumio -insecure-dev-auth "$USER" &
+./lumiod broker -run-dir /tmp/lumio -db /tmp/lumio/audit.db &
+./lumiod gateway -run-dir /tmp/lumio -addr 127.0.0.1:8080
 ```
 
-Reach it through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 host`) during
-Phase 2; there is deliberately no TLS and no auth on this build.
+systemd/journal/polkit do not exist on macOS: services, journal and
+broker actions answer `unavailable`; files, metrics, identity, auth
+and PTYs work.
+
+## Run on Ubuntu (production shape)
+
+```sh
+lumiod broker &     # root
+lumiod sessiond &   # root
+lumiod gateway &    # user lumio-gw, -addr 127.0.0.1:8080
+```
+
+PAM service file `/etc/pam.d/lumiod` (see `docker/pam.d-lumiod`),
+polkit action file `/usr/share/polkit-1/actions/os.lumio.policy`
+(see `docker/os.lumio.policy`). Reach the gateway through an SSH tunnel;
+there is no TLS in Phase 4.
 
 ## Build with the embedded frontend
 
@@ -114,11 +132,39 @@ than 404, per PROTOCOL.md's capability table.
 
 ### Container binding
 
-`docker/lumiod.service` starts lumiod with `-addr 0.0.0.0:8080` only so the
-Docker port forward used by the integration test can reach it. The default
-remains `127.0.0.1:8080` everywhere else. The container also runs lumiod as
-the unprivileged `lumio` user (member of `systemd-journal` so the journal
-stays readable); this mirrors the production posture.
+`docker/lumiod-gateway.service` binds 0.0.0.0:8080 only so the Docker port
+forward used by the integration test can reach the gateway. The default
+remains `127.0.0.1:8080` everywhere else. The container runs the full
+Phase 4 process set (gateway as `lumio-gw`, sessiond and broker as root)
+with a test user `alice` and a testbed-only polkit rules file
+(`docker/os.lumio-testbed.rules`) that makes authorization deterministic:
+`alice` may manage services, `ssh.service` requires `auth_admin` (the
+reauth path), and `nginx.service` is denied outright (the audit-denial
+path). A production host must not ship that rules file.
+
+### Phase 4 design decisions
+
+- **polkit subject.** polkit has no `unix-user` CheckAuthorization
+  subject kind, so the broker subjects the agent's `unix-process` (peer
+  pid + `start-time` from `/proc/<pid>/stat`); inside rules this
+  resolves to the requesting uid exactly like a uid subject.
+- **Reauth freshness lives in sessiond.** The broker validates the
+  session token's uid against the peer credential and checks the
+  5-minute window with sessiond; the agent cannot self-authorize.
+- **polkit details.** The unit name is passed as a CheckAuthorization
+  detail key so `.rules` can match per-unit without multiplying action
+  ids (the testbed rules use this).
+- **Audit.** SQLite via `modernc.org/sqlite` (pure Go) at
+  `/var/lib/lumio/audit.db`, WAL mode. Kinds: `begin`/`end` pairs, and
+  `deny` for polkit denials and unmet reauth demands. Precondition
+  conflicts write no rows (documented pipeline order). Idempotent
+  replays are served from the audit table itself, so dedup survives
+  broker restarts.
+- **WS through the gateway.** The gateway hijacks the upgraded
+  connection and splices bytes to the agent's socket, so the Phase 2/3
+  WS implementation in `wsapi` runs unchanged inside the agent.
+
+### Metrics notes
 
 ### Terminal sessions
 
@@ -170,12 +216,17 @@ log will persist it.
 ## Layout
 
 ```
-cmd/lumiod/      main + flags
+cmd/lumiod/      subcommand dispatch: gateway | sessiond | agent | broker | (default: single-process)
 cmd/wscheck/     WS assertion client used by the integration test
-internal/config/ flag parsing
-internal/httpapi REST routing, envelopes, error-code mapping, idempotency
+internal/config/ flag parsing (single-process mode)
+internal/auth/   PAM behind the `pam` build tag + nopam fallback
+internal/ipc/    unix-socket HTTP helpers, SO_PEERCRED, /proc start times
+internal/gateway/ cookies, CSRF, login rate limiting, REST proxy, WS splice
+internal/sessiond/ PAM login, session store/expiry, agent spawn + reap
+internal/broker/ action validation, polkit authorizer, audit, systemd exec
+internal/httpapi agent REST routing, envelopes, error-code mapping
 internal/wsapi/  WS hub: hello/ping/pong, multiplexed numbered channels
-internal/system/ identity, overview, metrics sampler (/proc, statfs)
+internal/system/ identity (incl. user), overview, metrics sampler
 internal/services systemd D-Bus client + change watcher (signals + 10 s poll)
 internal/journal/ journal.Backend interface + journalctl CLI implementation
 internal/files/  path cleaning, list/read, atomic write, freedesktop trash

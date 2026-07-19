@@ -22,6 +22,20 @@ export function csrfToken(): string | null {
   return match?.[1] ? decodeURIComponent(match[1]) : null;
 }
 
+type SessionExpiredListener = () => void;
+const sessionExpiredListeners = new Set<SessionExpiredListener>();
+
+export function onSessionExpired(listener: SessionExpiredListener): () => void {
+  sessionExpiredListeners.add(listener);
+  return () => {
+    sessionExpiredListeners.delete(listener);
+  };
+}
+
+function emitSessionExpired() {
+  sessionExpiredListeners.forEach((listener) => listener());
+}
+
 type QueryParams = Record<string, string | number | undefined>;
 
 const MAX_ATTEMPTS: Partial<Record<ProtocolErrorCode, number>> = {
@@ -73,7 +87,9 @@ async function rawRequest<T>(method: string, path: string, params?: QueryParams,
   }
   if (parsed.ok === true) return parsed.data as T;
   if (parsed.error && typeof parsed.error.code === 'string') {
-    throw new ApiError(parsed.error.code, parsed.error.message || 'The request failed.', parsed.error.details ?? {}, res.status);
+    const error = new ApiError(parsed.error.code, parsed.error.message || 'The request failed.', parsed.error.details ?? {}, res.status);
+    if (error.code === 'unauthorized' && !path.startsWith('/auth/')) emitSessionExpired();
+    throw error;
   }
   throw new ApiError('internal', `Unexpected response from the server (HTTP ${res.status}).`, {}, res.status);
 }

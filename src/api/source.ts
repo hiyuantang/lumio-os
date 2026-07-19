@@ -126,11 +126,24 @@ export interface SourceCapabilities {
   canWriteFiles: boolean;
 }
 
+export interface SessionUser {
+  name: string;
+  uid?: number;
+  gid?: number;
+  home?: string;
+}
+
 export type Unsubscribe = () => void;
 
 export interface DataSource {
   readonly kind: 'mock' | 'live';
   readonly capabilities: SourceCapabilities;
+
+  login(username: string, password: string): Promise<SessionUser>;
+  logout(): Promise<void>;
+  getSession(): Promise<SessionUser | null>;
+  reauth(password: string): Promise<void>;
+  onSessionExpired(listener: () => void): Unsubscribe;
 
   getIdentity(): Promise<SystemIdentity>;
   getOverview(): Promise<SystemOverview>;
@@ -140,7 +153,7 @@ export interface DataSource {
 
   listServices(): Promise<ServiceUnit[]>;
   subscribeServices(onChange: (units: ServiceUnit[]) => void): Unsubscribe;
-  runServiceAction(name: string, action: ServiceAction): Promise<ServiceUnit>;
+  runServiceAction(name: string, action: ServiceAction, expectedActiveState?: string): Promise<ServiceUnit>;
 
   queryJournal(query?: JournalQuery): Promise<JournalPage>;
   streamJournal(onEntry: (entry: LogLine) => void, onError?: (err: Error) => void): Unsubscribe;
@@ -153,6 +166,10 @@ export interface DataSource {
   deleteFile(path: string[]): Promise<void>;
 
   openTerminal(opts: TerminalOpenOptions, handlers: TerminalHandlers): TerminalSession;
+}
+
+export function isReauthRequired(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'forbidden' && err.details.reauthRequired === true;
 }
 
 export function describeError(err: unknown): string {

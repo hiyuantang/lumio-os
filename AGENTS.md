@@ -102,10 +102,13 @@ Layout:
 - `src/mock/` — mock implementation of the seam. Apps must read system
   state only through the seam (`src/api/source.ts`); never call `fetch`
   directly from components.
-- `server/cmd/lumiod/` — the agent binary (gateway + agent in one
-  process until the Phase 4 split).
-- `server/internal/` — httpapi, wsapi, system, services, journal,
-  files, static.
+- `server/cmd/lumiod/` — the agent binary. Subcommands: `gateway`
+  (unprivileged web frontend), `sessiond` (root, PAM + spawns per-user
+  agents), `agent` (per-user worker, runs as the real UID), `broker`
+  (root, typed privileged actions + polkit + audit). No subcommand runs
+  the legacy single-process unauthenticated mode for local dev.
+- `server/internal/` — auth, broker, files, gateway, httpapi, ipc,
+  journal, sessiond, services, system, terminal, wsapi.
 - `docker/` — systemd test image; `scripts/` — build and test scripts.
 - `tests/` — Playwright specs.
 

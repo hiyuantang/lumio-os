@@ -1,4 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
+FROM golang:1.26-bookworm AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpam0g-dev gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY server/go.mod server/go.sum ./
+RUN go mod download
+COPY server/ ./
+RUN CGO_ENABLED=1 go build -tags pam -o /out/lumiod ./cmd/lumiod
+
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -12,14 +24,26 @@ RUN apt-get update \
         cron \
         curl \
         ca-certificates \
+        policykit-1 \
+        libpam-runtime \
+        libpam-modules \
+        sqlite3 \
+        openssh-server \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN useradd --create-home --shell /bin/bash --groups systemd-journal lumio
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin lumio-gw \
+    && useradd --create-home --shell /bin/bash --groups systemd-journal alice \
+    && echo 'alice:alice-pass' | chpasswd
 
-COPY .build/lumiod /usr/local/bin/lumiod
-COPY lumiod.service /etc/systemd/system/lumiod.service
-RUN systemctl enable lumiod.service
+COPY --from=build /out/lumiod /usr/local/bin/lumiod
+COPY docker/lumiod-gateway.service docker/lumiod-sessiond.service docker/lumiod-broker.service /etc/systemd/system/
+COPY docker/pam.d-lumiod /etc/pam.d/lumiod
+COPY docker/os.lumio.policy /usr/share/polkit-1/actions/os.lumio.policy
+COPY docker/os.lumio-testbed.rules /etc/polkit-1/rules.d/90-lumio-testbed.rules
+
+RUN printf 'd /run/sshd 0755 root root -\n' > /etc/tmpfiles.d/lumio-testbed.conf \
+    && systemctl enable lumiod-gateway.service lumiod-sessiond.service lumiod-broker.service
 
 STOPSIGNAL SIGRTMIN+3
 

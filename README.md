@@ -68,14 +68,14 @@ automatic rollback.
 
 ## How to use it
 
-> **Status: Phase 3.** The desktop runs against mock data by default,
-> or against a real Ubuntu host via the Go agent (`lumiod`): live
-> identity, metrics, systemd units and journal, a real PTY terminal
-> (tabs, resize, reattach) running as the service user, and real file
-> browsing/editing with atomic saves, revision conflicts and trash.
-> No authentication yet — the agent binds to localhost; reach it
-> through an SSH tunnel. No installable package yet. The numbered flow
-> below describes the intended experience once the first release ships.
+> **Status: Phase 4.** The desktop runs against mock data by default,
+> or against a real Ubuntu host via the Lumio OS services: PAM login as
+> a real Linux user, a per-user session agent (terminal and files run
+> as that user), and a root privileged broker for typed service actions
+> with polkit authorization and an audit trail. Still bind to
+> localhost / SSH tunnel only — TLS and packaging land in Phase 7.
+> The numbered flow below describes the intended experience once the
+> first release ships.
 
 Run the desktop with mock data:
 
@@ -89,19 +89,20 @@ Run it against a real Ubuntu host (or the Docker testbed):
 
 ```sh
 scripts/build-with-web.sh         # builds lumiod with the UI embedded
-server/bin/lumiod                 # on the Ubuntu host; serves :8080 on localhost
+# on the Ubuntu host, run the three services (see server/README.md):
+#   lumiod broker & lumiod sessiond & lumiod gateway -web dist
 ssh -L 8080:127.0.0.1:8080 user@host   # from your machine, then open http://localhost:8080
 ```
 
-`scripts/integration-test.sh` spins up a privileged systemd Ubuntu
-24.04 container and runs the full REST/WebSocket assertion suite,
-including the "stop a service over SSH, watch it flip in the UI"
-exit gate.
+Log in with a real Linux account on the host. `scripts/integration-test.sh`
+spins up a privileged systemd Ubuntu 24.04 container and runs the full
+REST/WebSocket assertion suite — login, per-user terminal, service
+restart via the broker, audit rows, and the "stop a service over SSH,
+watch it flip in the UI" exit gate.
 
-Any non-empty username and password logs you into the desktop (login is
-still a mock until Phase 4). Useful shortcuts: `⌘/Ctrl+K` command
-center, `Alt+W` close window, `Ctrl+Alt+←/→` cycle windows. `npm test`
-runs the Playwright tests; `npm run build` typechecks and builds.
+Useful shortcuts: `⌘/Ctrl+K` command center, `Alt+W` close window,
+`Ctrl+Alt+←/→` cycle windows. `npm test` runs the Playwright tests;
+`npm run build` typechecks and builds.
 
 The target experience for the first release:
 

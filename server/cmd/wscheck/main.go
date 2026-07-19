@@ -30,6 +30,8 @@ type opts struct {
 	expect  string
 	match   string
 	cmd     string
+	cookie  string
+	csrf    string
 	timeout time.Duration
 }
 
@@ -51,9 +53,18 @@ func main() {
 	flag.StringVar(&o.expect, "expect", "", "expected activeState value in services mode (empty: any change)")
 	flag.StringVar(&o.match, "match", "", "substring expected in the observed payload")
 	flag.StringVar(&o.cmd, "cmd", "", "shell input to send in terminal mode")
+	flag.StringVar(&o.cookie, "cookie", "", "Cookie header value (e.g. lumio_session=...)")
+	flag.StringVar(&o.csrf, "csrf", "", "CSRF token appended as ?csrf= to the URL")
 	flag.DurationVar(&o.timeout, "timeout", 10*time.Second, "overall timeout")
 	flag.Parse()
 	o.cmd = strings.ReplaceAll(o.cmd, `\n`, "\n")
+	if o.csrf != "" {
+		sep := "?"
+		if strings.Contains(o.url, "?") {
+			sep = "&"
+		}
+		o.url += sep + "csrf=" + o.csrf
+	}
 
 	switch o.mode {
 	case "metrics", "services", "journal":
@@ -72,14 +83,22 @@ type client struct {
 	writeMu sync.Mutex
 }
 
-func dial(url string, timeout time.Duration) *client {
+func (o opts) headers() http.Header {
+	h := http.Header{}
+	if o.cookie != "" {
+		h.Set("Cookie", o.cookie)
+	}
+	return h
+}
+
+func (o opts) dial() *client {
 	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-	ws, _, err := dialer.Dial(url, http.Header{})
+	ws, _, err := dialer.Dial(o.url, o.headers())
 	if err != nil {
 		fail("dial: %v", err)
 	}
 	c := &client{ws: ws}
-	_ = ws.SetReadDeadline(time.Now().Add(timeout))
+	_ = ws.SetReadDeadline(time.Now().Add(o.timeout))
 	hello := c.read()
 	if hello.Type != "hello" {
 		fail("expected hello, got %s", hello.Type)
@@ -130,7 +149,7 @@ func runStreamMode(o opts) {
 		"services": "services.subscribe",
 		"journal":  "journal.stream",
 	}[o.mode]
-	c := dial(o.url, o.timeout)
+	c := o.dial()
 	defer c.ws.Close()
 
 	params := map[string]any{}
@@ -215,7 +234,7 @@ func runTerminalMode(o opts) {
 	if o.cmd == "" {
 		fail("-cmd is required in terminal mode")
 	}
-	c := dial(o.url, o.timeout)
+	c := o.dial()
 	defer c.ws.Close()
 	c.subscribe(1, "terminal.open", map[string]any{"cols": 80, "rows": 24})
 
@@ -273,7 +292,7 @@ func runReattachMode(o opts) {
 	if o.cmd == "" {
 		fail("-cmd is required in terminal-reattach mode")
 	}
-	first := dial(o.url, o.timeout)
+	first := o.dial()
 	first.subscribe(1, "terminal.open", map[string]any{"cols": 80, "rows": 24})
 
 	var token string
@@ -311,7 +330,7 @@ func runReattachMode(o opts) {
 	_ = first.ws.Close()
 	time.Sleep(500 * time.Millisecond)
 
-	second := dial(o.url, o.timeout)
+	second := o.dial()
 	defer second.ws.Close()
 	second.subscribe(1, "terminal.open", map[string]any{"session": token})
 	for {

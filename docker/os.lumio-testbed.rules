@@ -1,0 +1,19 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// TESTBED ONLY — deterministic authorization rules for the integration
+// container. A production host must rely on the .policy defaults and real
+// administrator policy, never on a blanket per-user grant like this.
+polkit.addRule(function(action, subject) {
+    if (action.id === "os.lumio.services.manage") {
+        var unit = action.lookup("unit");
+        if (unit === "ssh.service") {
+            return polkit.Result.AUTH_ADMIN;
+        }
+        if (unit === "nginx.service") {
+            return polkit.Result.NO;
+        }
+        if (subject.user === "alice") {
+            return polkit.Result.YES;
+        }
+    }
+});

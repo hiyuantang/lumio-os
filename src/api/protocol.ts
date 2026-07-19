@@ -88,6 +88,35 @@ export interface WireServicesList {
   units: WireServiceUnit[];
 }
 
+export interface WireServiceActionResult {
+  unit: {
+    name: string;
+    activeState: string;
+    subState: string;
+    enabledState: string;
+  };
+}
+
+export interface WireSessionUser {
+  name: string;
+  uid: number;
+  gid: number;
+  home: string;
+}
+
+export interface WireAuthLogin {
+  user: WireSessionUser;
+  csrf?: string;
+}
+
+export interface WireAuthSession {
+  user: WireSessionUser;
+}
+
+export interface WireReauth {
+  reauthenticatedUntil: number;
+}
+
 export type WireServicesEvent =
   | { kind: 'snapshot'; units: WireServiceUnit[] }
   | { kind: 'changed'; unit: Partial<WireServiceUnit> & { name: string } };

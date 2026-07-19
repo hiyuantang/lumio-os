@@ -1,0 +1,12 @@
+node_modules
+.tools
+.git
+dist
+test-results
+playwright-report
+coverage
+*.local
+.DS_Store
+docker/.build
+server/bin
+server/internal/static/dist

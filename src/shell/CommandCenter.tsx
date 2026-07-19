@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { getDataSource, type ServiceUnit } from '../api/source';
+import { describeError, getDataSource, isReauthRequired, type ServiceUnit } from '../api/source';
 import { APP_ORDER, APPS } from '../apps/registry';
 import { IconSearch } from './icons';
+import { useReauth } from './ReauthSheet';
 import { useShell } from './ShellContext';
 import '../styles/command-center.css';
 
@@ -31,11 +32,25 @@ function fuzzyRank(text: string, query: string): number | null {
 export function CommandCenter() {
   const { state, actions, resolvedTheme, reducedMotion } = useShell();
   const source = getDataSource();
+  const requireReauth = useReauth();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
   const [services, setServices] = useState<ServiceUnit[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  function restartService(svc: ServiceUnit) {
+    void source
+      .runServiceAction(svc.name, 'restart', svc.state)
+      .then((unit) => actions.notify('Service restarted', `${unit.name} is ${unit.state}.`))
+      .catch((err) => {
+        if (isReauthRequired(err)) {
+          requireReauth(() => restartService(svc));
+          return;
+        }
+        actions.notify('Service action failed', describeError(err));
+      });
+  }
 
   useEffect(() => {
     if (!state.paletteOpen || !source.capabilities.canServiceActions) return;
@@ -70,11 +85,7 @@ export function CommandCenter() {
           title: `Restart ${svc.name}`,
           group: 'Services',
           keywords: `restart service ${svc.name} ${svc.description}`,
-          run: () => {
-            void source.runServiceAction(svc.name, 'restart').then((unit) =>
-              actions.notify('Service restarted', `${unit.name} is ${unit.state}.`),
-            );
-          },
+          run: () => restartService(svc),
         });
       }
     }

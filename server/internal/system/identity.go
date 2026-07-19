@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/user"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,8 +19,8 @@ type OSInfo struct {
 
 type UserInfo struct {
 	Name string `json:"name"`
-	UID  string `json:"uid"`
-	GID  string `json:"gid"`
+	UID  uint32 `json:"uid"`
+	GID  uint32 `json:"gid"`
 	Home string `json:"home"`
 }
 
@@ -60,7 +61,9 @@ func ReadIdentity() Identity {
 
 func currentUser() UserInfo {
 	if u, err := user.Current(); err == nil {
-		return UserInfo{Name: u.Username, UID: u.Uid, GID: u.Gid, Home: u.HomeDir}
+		uid, _ := strconv.ParseUint(u.Uid, 10, 32)
+		gid, _ := strconv.ParseUint(u.Gid, 10, 32)
+		return UserInfo{Name: u.Username, UID: uint32(uid), GID: uint32(gid), Home: u.HomeDir}
 	}
 	name := os.Getenv("USER")
 	home, _ := os.UserHomeDir()
