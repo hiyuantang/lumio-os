@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"lumio-os/server/internal/ipc"
+	"lumio-os/server/internal/network"
 )
 
 func TestValidate(t *testing.T) {
@@ -93,10 +94,76 @@ func TestPhase5ActionsAreTypedAndValidated(t *testing.T) {
 	}
 }
 
+func TestPhase6PowerActionsAreTypedAndValidated(t *testing.T) {
+	for _, action := range []string{"system.reboot", "system.poweroff"} {
+		req := ActionRequest{RequestID: "power-1", Action: action}
+		if err := req.validate(); err != nil {
+			t.Fatalf("%s rejected: %v", action, err)
+		}
+	}
+	req := ActionRequest{RequestID: "power-2", Action: "system.poweroff; reboot"}
+	if err := req.validate(); err == nil {
+		t.Fatal("injection-shaped power action was accepted")
+	}
+}
+
+func TestPhase6NetworkActionsAreTypedAndValidated(t *testing.T) {
+	req := ActionRequest{RequestID: "network-1", Action: "network.applyWithRollback"}
+	req.Arguments.Config = network.Config{
+		Version:   2,
+		Ethernets: map[string]network.EthernetConfig{"eth0": {DHCP4: true}},
+	}
+	req.Arguments.ConfirmTimeoutSec = 30
+	req.Expected = &struct {
+		ActiveState string `json:"activeState"`
+		PlanID      string `json:"planId"`
+		Revision    string `json:"revision"`
+	}{Revision: "sha256:" + strings.Repeat("0", 64)}
+	if err := req.validate(); err != nil {
+		t.Fatalf("network apply rejected: %v", err)
+	}
+	req.Arguments.Config.Ethernets = map[string]network.EthernetConfig{"eth0.dhcp4=false": {DHCP4: true}}
+	if err := req.validate(); err == nil {
+		t.Fatal("injection-shaped interface was accepted")
+	}
+	confirm := ActionRequest{RequestID: "network-2", Action: "network.confirm"}
+	confirm.Arguments.Token = strings.Repeat("a", 64)
+	if err := confirm.validate(); err != nil {
+		t.Fatalf("network confirmation rejected: %v", err)
+	}
+}
+
 type fakeSystemd struct {
 	calls []string
 	state UnitState
 	err   error
+}
+
+type fakePower struct {
+	calls []string
+	err   error
+}
+
+type fakeNetwork struct {
+	applies  []network.Config
+	confirms []string
+	pending  network.Pending
+	err      error
+}
+
+func (f *fakeNetwork) Apply(_ context.Context, config network.Config, _ string, _ int) (network.Pending, error) {
+	f.applies = append(f.applies, config)
+	return f.pending, f.err
+}
+
+func (f *fakeNetwork) Confirm(_ context.Context, token string) (network.Pending, error) {
+	f.confirms = append(f.confirms, token)
+	return f.pending, f.err
+}
+
+func (f *fakePower) schedule(_ context.Context, action string, at time.Time) error {
+	f.calls = append(f.calls, action+" "+at.UTC().Format(time.RFC3339Nano))
+	return f.err
 }
 
 func (f *fakeSystemd) unitState(context.Context, string) (UnitState, error) { return f.state, f.err }
@@ -125,6 +192,13 @@ func testBroker(t *testing.T, authz Authorizer, sessiondHandler http.Handler) (*
 	s.audit = audit
 	sys := &fakeSystemd{state: UnitState{ActiveState: "active", SubState: "running"}}
 	s.sys = sys
+	s.power = &fakePower{}
+	s.network = &fakeNetwork{pending: network.Pending{
+		Token:            strings.Repeat("a", 64),
+		PreviousRevision: "sha256:" + strings.Repeat("0", 64),
+		ExpiresAt:        time.Now().UTC().Add(time.Minute),
+		ConfirmTimeout:   30,
+	}}
 
 	_ = os.Remove(s.cfg.SocketPath)
 	ln, err := net.Listen("unix", s.cfg.SocketPath)
@@ -204,6 +278,131 @@ func TestActionDeny(t *testing.T) {
 	_ = s.audit.db.QueryRow(`SELECT outcome FROM audit WHERE request_id = 'b2'`).Scan(&outcome)
 	if outcome != "denied" {
 		t.Errorf("audit outcome = %q", outcome)
+	}
+}
+
+func TestPowerActionUsesDedicatedPolicyAndAudit(t *testing.T) {
+	var checkedActionID string
+	authz := StaticAuthorizer{Rules: func(_ uint32, actionID string, details map[string]string) Result {
+		checkedActionID = actionID
+		if details["action"] != "system.reboot" {
+			t.Errorf("details = %v", details)
+		}
+		return Allow
+	}}
+	s, client, _ := testBroker(t, authz, nil)
+	status, _, body := callAction(t, client, `{"requestId":"power-allow","action":"system.reboot","arguments":{}}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%v", status, body)
+	}
+	if checkedActionID != systemPowerActionID {
+		t.Errorf("action id = %q", checkedActionID)
+	}
+	power := s.power.(*fakePower)
+	if len(power.calls) != 1 || !strings.HasPrefix(power.calls[0], "system.reboot ") {
+		t.Errorf("calls = %v", power.calls)
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["action"] != "system.reboot" || data["scheduledAt"] == "" {
+		t.Errorf("data = %v", data)
+	}
+	var outcome string
+	_ = s.audit.db.QueryRow(`SELECT outcome FROM audit WHERE request_id = 'power-allow' AND kind = 'end'`).Scan(&outcome)
+	if outcome != "success" {
+		t.Errorf("audit outcome = %q", outcome)
+	}
+}
+
+func TestPowerActionRequiresReauthentication(t *testing.T) {
+	var checkedActionID string
+	authz := StaticAuthorizer{Rules: func(_ uint32, actionID string, _ map[string]string) Result {
+		checkedActionID = actionID
+		return Challenge
+	}}
+	s, client, _ := testBroker(t, authz, nil)
+	status, _, body := callAction(t, client, `{"requestId":"power-challenge","action":"system.poweroff","arguments":{}}`)
+	if status != http.StatusForbidden {
+		t.Fatalf("status=%d body=%v", status, body)
+	}
+	if checkedActionID != systemPowerActionID {
+		t.Errorf("action id = %q", checkedActionID)
+	}
+	if len(s.power.(*fakePower).calls) != 0 {
+		t.Fatal("power action executed without reauthentication")
+	}
+	errObj, _ := body["error"].(map[string]any)
+	details, _ := errObj["details"].(map[string]any)
+	if details["reauthRequired"] != true {
+		t.Errorf("details = %v", details)
+	}
+}
+
+func TestNetworkApplyUsesDedicatedPolicyAndAudit(t *testing.T) {
+	var checkedActionID string
+	authz := StaticAuthorizer{Rules: func(_ uint32, actionID string, details map[string]string) Result {
+		checkedActionID = actionID
+		if details["action"] != "network.applyWithRollback" {
+			t.Errorf("details = %v", details)
+		}
+		return Allow
+	}}
+	s, client, _ := testBroker(t, authz, nil)
+	payload := `{"requestId":"network-allow","action":"network.applyWithRollback","arguments":{"config":{"version":2,"ethernets":{"eth0":{"dhcp4":true,"dhcp6":false}}},"confirmTimeoutSec":30},"expected":{"revision":"sha256:` + strings.Repeat("0", 64) + `"}}`
+	status, _, body := callAction(t, client, payload)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%v", status, body)
+	}
+	if checkedActionID != networkApplyActionID {
+		t.Errorf("action id = %q", checkedActionID)
+	}
+	networkFake := s.network.(*fakeNetwork)
+	if len(networkFake.applies) != 1 {
+		t.Fatalf("applies = %v", networkFake.applies)
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["token"] != strings.Repeat("a", 64) || data["expiresAt"] == "" {
+		t.Errorf("data = %v", data)
+	}
+	var outcome string
+	_ = s.audit.db.QueryRow(`SELECT outcome FROM audit WHERE request_id = 'network-allow' AND kind = 'end'`).Scan(&outcome)
+	if outcome != "success" {
+		t.Errorf("audit outcome = %q", outcome)
+	}
+}
+
+func TestNetworkActionRequiresReauthentication(t *testing.T) {
+	var checkedActionID string
+	authz := StaticAuthorizer{Rules: func(_ uint32, actionID string, _ map[string]string) Result {
+		checkedActionID = actionID
+		return Challenge
+	}}
+	s, client, _ := testBroker(t, authz, nil)
+	status, _, body := callAction(t, client, `{"requestId":"network-challenge","action":"network.confirm","arguments":{"token":"`+strings.Repeat("a", 64)+`"}}`)
+	if status != http.StatusForbidden {
+		t.Fatalf("status=%d body=%v", status, body)
+	}
+	if checkedActionID != networkApplyActionID {
+		t.Errorf("action id = %q", checkedActionID)
+	}
+	if len(s.network.(*fakeNetwork).confirms) != 0 {
+		t.Fatal("network action executed without reauthentication")
+	}
+	errObj, _ := body["error"].(map[string]any)
+	details, _ := errObj["details"].(map[string]any)
+	if details["reauthRequired"] != true {
+		t.Errorf("details = %v", details)
+	}
+}
+
+func TestNetworkConfirmRejectsWrongTokenBeforeExecution(t *testing.T) {
+	authz := StaticAuthorizer{Rules: func(uint32, string, map[string]string) Result { return Allow }}
+	s, client, _ := testBroker(t, authz, nil)
+	status, _, body := callAction(t, client, `{"requestId":"network-confirm","action":"network.confirm","arguments":{"token":"bad"}}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%v", status, body)
+	}
+	if len(s.network.(*fakeNetwork).confirms) != 0 {
+		t.Fatal("invalid confirmation token reached the network controller")
 	}
 }
 

@@ -9,6 +9,12 @@ import type {
   JournalQuery,
   LoadSample,
   LogLine,
+  NetworkConfig,
+  NetworkConfirmation,
+  NetworkSnapshot,
+  PendingNetworkChange,
+  PowerAction,
+  PowerSchedule,
   PrivilegedFileWrite,
   ServiceAction,
   ServiceDetail,
@@ -62,6 +68,8 @@ export class MockDataSource implements DataSource {
     canTerminal: true,
     canWriteFiles: true,
     canManageUpdates: true,
+    canPowerControl: true,
+    canConfigureNetwork: true,
   };
 
   async login(username: string): Promise<SessionUser> {
@@ -94,6 +102,48 @@ export class MockDataSource implements DataSource {
 
   async getOverview(): Promise<SystemOverview> {
     return getOverview();
+  }
+
+  async runPowerAction(action: PowerAction): Promise<PowerSchedule> {
+    return {
+      action: `system.${action}`,
+      scheduledAt: new Date(Date.now() + 5000).toISOString(),
+    };
+  }
+
+  async getNetworkSnapshot(): Promise<NetworkSnapshot> {
+    return {
+      revision: `sha256:${'0'.repeat(64)}`,
+      interfaces: [
+        {
+          name: 'eth0',
+          hardwareAddress: '02:42:ac:11:00:02',
+          addresses: ['192.0.2.10/24'],
+          up: true,
+          loopback: false,
+        },
+      ],
+    };
+  }
+
+  async applyNetworkConfig(
+    _config: NetworkConfig,
+    expectedRevision: string,
+    confirmTimeoutSec = 90,
+  ): Promise<PendingNetworkChange> {
+    return {
+      token: 'a'.repeat(64),
+      previousRevision: expectedRevision,
+      expiresAt: new Date(Date.now() + confirmTimeoutSec * 1000).toISOString(),
+      confirmTimeoutSec,
+    };
+  }
+
+  async confirmNetworkConfig(token: string): Promise<NetworkConfirmation> {
+    return {
+      token,
+      confirmed: true,
+    };
   }
 
   uptimeSeconds(): number {

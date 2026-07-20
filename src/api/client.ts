@@ -33,6 +33,12 @@ import type {
   LoadSample,
   LogLine,
   LogPriority,
+  NetworkConfig,
+  NetworkConfirmation,
+  NetworkSnapshot,
+  PendingNetworkChange,
+  PowerAction,
+  PowerSchedule,
   PrivilegedFileWrite,
   ServiceAction,
   ServiceDetail,
@@ -150,6 +156,8 @@ export class LiveDataSource implements DataSource {
     canTerminal: true,
     canWriteFiles: true,
     canManageUpdates: true,
+    canPowerControl: true,
+    canConfigureNetwork: true,
   };
 
   private socket = new LumioSocket();
@@ -258,6 +266,34 @@ export class LiveDataSource implements DataSource {
       alerts,
       cpuHistory: [...this.cpuHistory],
     };
+  }
+
+  async runPowerAction(action: PowerAction): Promise<PowerSchedule> {
+    return apiPost<PowerSchedule>('/system/power', { requestId: crypto.randomUUID(), action });
+  }
+
+  async getNetworkSnapshot(): Promise<NetworkSnapshot> {
+    return apiGet<NetworkSnapshot>('/network');
+  }
+
+  async applyNetworkConfig(
+    config: NetworkConfig,
+    expectedRevision: string,
+    confirmTimeoutSec = 90,
+  ): Promise<PendingNetworkChange> {
+    return apiPost<PendingNetworkChange>('/network/apply', {
+      requestId: crypto.randomUUID(),
+      config,
+      expectedRevision,
+      confirmTimeoutSec,
+    });
+  }
+
+  async confirmNetworkConfig(token: string): Promise<NetworkConfirmation> {
+    return apiPost<NetworkConfirmation>('/network/confirm', {
+      requestId: crypto.randomUUID(),
+      token,
+    });
   }
 
   uptimeSeconds(): number {

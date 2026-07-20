@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { ComponentType, SVGProps } from 'react';
-import { IconChip, IconFolder, IconGear, IconHome, IconList, IconTerminal } from '../shell/icons';
+import { IconChip, IconFolder, IconGear, IconHome, IconList, IconNetwork, IconTerminal } from '../shell/icons';
 
-export type AppId = 'home' | 'services' | 'files' | 'terminal' | 'logs' | 'updates';
+export type AppId = 'home' | 'services' | 'files' | 'terminal' | 'logs' | 'updates' | 'network' | 'settings';
 
 export interface AppMeta {
   id: AppId;
@@ -12,7 +12,7 @@ export interface AppMeta {
   minSize: { w: number; h: number };
 }
 
-export const APP_ORDER: AppId[] = ['home', 'services', 'files', 'terminal', 'logs', 'updates'];
+export const APP_ORDER: AppId[] = ['home', 'services', 'files', 'terminal', 'logs', 'updates', 'network', 'settings'];
 
 export const APPS: Record<AppId, AppMeta> = {
   home: {
@@ -56,5 +56,19 @@ export const APPS: Record<AppId, AppMeta> = {
     icon: IconChip,
     defaultSize: { w: 760, h: 540 },
     minSize: { w: 520, h: 380 },
+  },
+  network: {
+    id: 'network',
+    title: 'Network',
+    icon: IconNetwork,
+    defaultSize: { w: 760, h: 540 },
+    minSize: { w: 560, h: 420 },
+  },
+  settings: {
+    id: 'settings',
+    title: 'Settings',
+    icon: IconGear,
+    defaultSize: { w: 620, h: 440 },
+    minSize: { w: 440, h: 340 },
   },
 };

@@ -35,6 +35,10 @@ POST /api/v1/auth/reauth                 Phase 4
 GET  /api/v1/system/identity
 GET  /api/v1/system/overview
 GET  /api/v1/system/metrics              one sample; live stream over WS
+POST /api/v1/system/power                Phase 6
+GET  /api/v1/network                     Phase 6
+POST /api/v1/network/apply               Phase 6
+POST /api/v1/network/confirm             Phase 6
 GET  /api/v1/services
 GET  /api/v1/services/detail             Phase 5
 POST /api/v1/services/action             Phase 4
@@ -893,5 +897,119 @@ write. `restartUnit` is optional and must be a service unit name.
     },
     "restart": { "success": true, "unit": { "name": "nginx.service" } }
   }
+}
+```
+
+## Phase 6 subset — system power
+
+### `system.power`
+
+`POST /api/v1/system/power` with `X-Lumio-CSRF` schedules one of the
+two typed host power actions:
+
+```json
+{ "requestId": "bd70…", "action": "reboot" }
+```
+
+`action` is exactly `reboot` or `poweroff`. The agent forwards
+`system.reboot` or `system.poweroff` to the broker; arbitrary command
+or target strings are not accepted. Both operations require
+`os.lumio.system.power` reauthentication and produce audit begin/end
+rows. On success, logind schedules the transition a few seconds ahead
+so the audit result and response can be persisted first:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "action": "system.reboot",
+    "scheduledAt": "2026-07-20T18:42:10.125Z"
+  }
+}
+```
+
+The browser should expect its session and active streams to disconnect
+when the scheduled transition begins. Replaying the same `requestId`
+returns the stored result and does not schedule a second transition.
+
+## Phase 6 subset — network rollback
+
+### `network.snapshot`
+
+`GET /api/v1/network` returns live interface state together with a
+revision of Netplan's merged configuration:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "revision": "sha256:41b0…",
+    "interfaces": [
+      {
+        "name": "eth0",
+        "hardwareAddress": "02:42:ac:11:00:02",
+        "addresses": ["192.0.2.10/24"],
+        "up": true,
+        "loopback": false
+      }
+    ]
+  }
+}
+```
+
+### `network.applyWithRollback`
+
+`POST /api/v1/network/apply` accepts a typed Netplan subset. It does
+not accept YAML, renderer passthrough or command strings:
+
+```json
+{
+  "requestId": "4f62…",
+  "expectedRevision": "sha256:41b0…",
+  "confirmTimeoutSec": 90,
+  "config": {
+    "version": 2,
+    "ethernets": {
+      "eth0": {
+        "dhcp4": false,
+        "dhcp6": false,
+        "addresses": ["192.0.2.10/24"],
+        "nameservers": { "addresses": ["1.1.1.1"] },
+        "routes": [{ "to": "default", "via": "192.0.2.1", "metric": 100 }]
+      }
+    }
+  }
+}
+```
+
+The broker creates a Netplan D-Bus configuration object, compares the
+live merged revision, stages the typed delta and invokes `Try` with a
+30–300 second timeout. Only one candidate may be pending. Netplan's
+automatic revert is reinforced by a broker timer that calls `Cancel`
+at expiry and verifies the restored merged revision before admitting a
+new candidate.
+
+```json
+{
+  "ok": true,
+  "data": {
+    "token": "9e0f…",
+    "previousRevision": "sha256:41b0…",
+    "expiresAt": "2026-07-20T20:14:30Z",
+    "confirmTimeoutSec": 90
+  }
+}
+```
+
+After the browser reconnects, `POST /api/v1/network/confirm` with a
+new request id and the returned token calls Netplan `Apply` and commits
+the candidate. A missing or late confirmation restores the previous
+configuration. Apply and confirm both require
+`os.lumio.network.apply` reauthentication and are audited.
+
+```json
+{
+  "ok": true,
+  "data": { "token": "9e0f…", "confirmed": true }
 }
 ```

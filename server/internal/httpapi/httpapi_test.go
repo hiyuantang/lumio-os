@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"lumio-os/server/internal/journal"
+	"lumio-os/server/internal/network"
 	"lumio-os/server/internal/services"
 	"lumio-os/server/internal/static"
 	"lumio-os/server/internal/system"
@@ -48,6 +49,19 @@ func (f fakeServices) SubscribeChanges(context.Context) (<-chan services.Unit, e
 
 type fakeJournal struct {
 	available bool
+}
+
+type fakeNetworkSnapshotter struct {
+	available bool
+	snapshot  network.Snapshot
+}
+
+func (f fakeNetworkSnapshotter) Available() bool { return f.available }
+func (f fakeNetworkSnapshotter) Snapshot(context.Context) (network.Snapshot, error) {
+	if !f.available {
+		return network.Snapshot{}, errors.New("unavailable")
+	}
+	return f.snapshot, nil
 }
 
 func (f fakeJournal) Available() bool { return f.available }
@@ -212,6 +226,10 @@ func TestUnavailableEndpoints(t *testing.T) {
 		{"POST", "/api/v1/updates/refresh"},
 		{"POST", "/api/v1/updates/plan"},
 		{"POST", "/api/v1/updates/apply"},
+		{"POST", "/api/v1/system/power"},
+		{"GET", "/api/v1/network"},
+		{"POST", "/api/v1/network/apply"},
+		{"POST", "/api/v1/network/confirm"},
 	} {
 		req, _ := http.NewRequest(tc.method, ts.URL+tc.path, nil)
 		res, err := http.DefaultClient.Do(req)
@@ -224,6 +242,97 @@ func TestUnavailableEndpoints(t *testing.T) {
 		if res.StatusCode != 503 || env.Error == nil || env.Error.Code != CodeUnavailable {
 			t.Errorf("%s %s: status=%d env=%+v", tc.method, tc.path, res.StatusCode, env)
 		}
+	}
+}
+
+func TestSystemPowerValidation(t *testing.T) {
+	s := NewServer(Deps{
+		Version:      "test",
+		Sampler:      system.NewSampler(),
+		Services:     fakeServices{},
+		Journal:      fakeJournal{},
+		BrokerSocket: "/missing/broker.sock",
+	})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	for _, body := range []string{
+		`{"requestId":"power-1","action":"restart; shutdown"}`,
+		`{"requestId":"","action":"reboot"}`,
+	} {
+		res, err := http.Post(ts.URL+"/api/v1/system/power", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env testEnvelope
+		_ = json.NewDecoder(res.Body).Decode(&env)
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest || env.Error == nil || env.Error.Code != CodeValidationFailed {
+			t.Errorf("body=%s status=%d env=%+v", body, res.StatusCode, env)
+		}
+	}
+}
+
+func TestNetworkSnapshot(t *testing.T) {
+	s := NewServer(Deps{
+		Version:  "test",
+		Sampler:  system.NewSampler(),
+		Services: fakeServices{},
+		Journal:  fakeJournal{},
+		Network: fakeNetworkSnapshotter{available: true, snapshot: network.Snapshot{
+			Revision: "sha256:" + strings.Repeat("0", 64),
+			Interfaces: []network.Interface{{
+				Name:      "eth0",
+				Addresses: []string{"192.0.2.10/24"},
+				Up:        true,
+			}},
+		}},
+	})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+	status, env := get(t, ts.URL+"/api/v1/network")
+	if status != http.StatusOK || !strings.Contains(string(env.Data), `"name":"eth0"`) {
+		t.Fatalf("status=%d data=%s", status, env.Data)
+	}
+}
+
+func TestNetworkMutationValidation(t *testing.T) {
+	s := NewServer(Deps{
+		Version:      "test",
+		Sampler:      system.NewSampler(),
+		Services:     fakeServices{},
+		Journal:      fakeJournal{},
+		BrokerSocket: "/missing/broker.sock",
+	})
+	ts := httptest.NewServer(s.Handler())
+	defer ts.Close()
+
+	applyBodies := []string{
+		`{"requestId":"network-1","expectedRevision":"bad","config":{"version":2,"ethernets":{"eth0":{"dhcp4":true}}}}`,
+		`{"requestId":"network-2","expectedRevision":"sha256:` + strings.Repeat("0", 64) + `","config":{"version":2,"ethernets":{"eth0.dhcp4=false":{"dhcp4":true}}}}`,
+		`{"requestId":"network-3","expectedRevision":"sha256:` + strings.Repeat("0", 64) + `","confirmTimeoutSec":10,"config":{"version":2,"ethernets":{"eth0":{"dhcp4":true}}}}`,
+	}
+	for _, body := range applyBodies {
+		res, err := http.Post(ts.URL+"/api/v1/network/apply", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var env testEnvelope
+		_ = json.NewDecoder(res.Body).Decode(&env)
+		res.Body.Close()
+		if res.StatusCode != http.StatusBadRequest || env.Error == nil || env.Error.Code != CodeValidationFailed {
+			t.Errorf("body=%s status=%d env=%+v", body, res.StatusCode, env)
+		}
+	}
+	res, err := http.Post(ts.URL+"/api/v1/network/confirm", "application/json", strings.NewReader(`{"requestId":"network-4","token":"bad"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var env testEnvelope
+	_ = json.NewDecoder(res.Body).Decode(&env)
+	res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest || env.Error == nil || env.Error.Code != CodeValidationFailed {
+		t.Errorf("confirm status=%d env=%+v", res.StatusCode, env)
 	}
 }
 

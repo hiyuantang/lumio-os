@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"lumio-os/server/internal/journal"
+	"lumio-os/server/internal/network"
 	"lumio-os/server/internal/services"
 	"lumio-os/server/internal/system"
 )
@@ -21,6 +22,7 @@ type Deps struct {
 	Sampler      *system.Sampler
 	Services     services.API
 	Journal      journal.Backend
+	Network      network.Snapshotter
 	WS           http.Handler
 	Static       http.Handler
 	BrokerSocket string
@@ -41,6 +43,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/identity", s.handleIdentity)
 	mux.HandleFunc("GET /api/v1/system/overview", s.handleOverview)
 	mux.HandleFunc("GET /api/v1/system/metrics", s.handleMetrics)
+	mux.HandleFunc("POST /api/v1/system/power", s.handleSystemPower)
+	mux.HandleFunc("GET /api/v1/network", s.handleNetworkSnapshot)
+	mux.HandleFunc("POST /api/v1/network/apply", s.handleNetworkApply)
+	mux.HandleFunc("POST /api/v1/network/confirm", s.handleNetworkConfirm)
 	mux.HandleFunc("GET /api/v1/services", s.handleServices)
 	mux.HandleFunc("GET /api/v1/services/detail", s.handleServiceDetail)
 	mux.HandleFunc("GET /api/v1/journal", s.handleJournal)

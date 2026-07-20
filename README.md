@@ -68,18 +68,23 @@ automatic rollback.
 
 ## How to use it
 
-> **Status: Phase 5 complete.** The desktop runs against mock data by default,
+> **Status: Phase 5 complete; Phases 6 and 7 in progress.** The desktop runs against mock data by default,
 > or against a real Ubuntu host via the Lumio OS services: PAM login as
 > a real Linux user, a per-user session agent (terminal and files run
 > as that user), and a root privileged broker for typed service actions
 > with polkit authorization and an audit trail. Still bind to
-> localhost / SSH tunnel only — TLS and packaging land in Phase 7.
+> localhost / SSH tunnel only — TLS and packaging remain in Phase 7.
 > Services includes dependencies, loaded unit files and related-log navigation;
 > Logs includes boot/time filters, structured fields, saved searches, export
 > and service navigation; Updates provides saved plans, security and size
 > breakdowns, installation progress and reboot state; Files can validate and
-> atomically update protected `/etc` files with rollback copies. Phase 6 risky
-> host operations and Phase 7 packaging/hardening remain.
+> atomically update protected `/etc` files with rollback copies. Settings now
+> schedules typed, reauthenticated reboot and shutdown actions through logind,
+> while typed Netplan changes now use a broker-owned confirm-or-revert
+> transaction. The gateway ships CSP, cross-origin opener/resource controls, permissions
+> policy and no-store API responses. The Network app exposes live interfaces
+> and the typed confirm-or-revert workflow. Firewall rollback and the
+> remaining Phase 6/7 packaging work remain.
 > The numbered flow below describes the intended experience once the
 > first release ships.
 

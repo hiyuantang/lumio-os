@@ -164,6 +164,52 @@ func TestSessionRequired(t *testing.T) {
 	}
 }
 
+func TestSecurityHeaders(t *testing.T) {
+	_, srv := testGateway(t)
+	resp, err := http.Get(srv.URL + "/api/v1/meta/version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "default-src 'self'") || !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("content security policy = %q", csp)
+	}
+	if resp.Header.Get("Referrer-Policy") != "no-referrer" {
+		t.Errorf("referrer policy = %q", resp.Header.Get("Referrer-Policy"))
+	}
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("content type options = %q", resp.Header.Get("X-Content-Type-Options"))
+	}
+	if resp.Header.Get("Cross-Origin-Opener-Policy") != "same-origin" || resp.Header.Get("Cross-Origin-Resource-Policy") != "same-origin" {
+		t.Errorf("cross-origin headers = %q %q", resp.Header.Get("Cross-Origin-Opener-Policy"), resp.Header.Get("Cross-Origin-Resource-Policy"))
+	}
+	if resp.Header.Get("Permissions-Policy") != "camera=(), microphone=(), geolocation=(), payment=(), usb=()" {
+		t.Errorf("permissions policy = %q", resp.Header.Get("Permissions-Policy"))
+	}
+	if resp.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("cache control = %q", resp.Header.Get("Cache-Control"))
+	}
+	if resp.Header.Get("Strict-Transport-Security") != "" {
+		t.Error("HSTS must not be sent over plain HTTP")
+	}
+}
+
+func TestHSTSOnTLS(t *testing.T) {
+	agentSock = ""
+	gw := New(Config{SessiondSocket: stubSessiond(t), Version: "test"})
+	srv := httptest.NewTLSServer(gw.Handler())
+	defer srv.Close()
+	resp, err := srv.Client().Get(srv.URL + "/api/v1/meta/version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get("Strict-Transport-Security") != "max-age=31536000" {
+		t.Errorf("HSTS = %q", resp.Header.Get("Strict-Transport-Security"))
+	}
+}
+
 func TestCSRFRequired(t *testing.T) {
 	_, srv := testGateway(t)
 	cookies := loginCookies(t, srv)

@@ -34,9 +34,9 @@ normal Linux permissions.
 | Logs | journald with live filters and saved searches | Phase 5 complete |
 | Updates | Package refresh, upgrade plan, installation and reboot status | Phase 5 complete |
 | Storage | Disks, partitions, mounts, filesystems and SMART status | planned |
-| Network | Interfaces, addresses, DNS, routes, listeners and firewall | planned |
+| Network | Interfaces, addresses, DNS, routes, listeners and firewall | Phase 6 in progress: live interfaces and typed Netplan transactions with dead-man rollback |
 | Containers | Docker or Podman containers, images, logs and Compose projects | planned |
-| Settings | Users, SSH keys, security, TLS, locale, time and product settings | planned |
+| Settings | Users, SSH keys, security, TLS, locale, time and product settings | Phase 6 in progress: reauthenticated power controls |
 
 ## First useful release
 

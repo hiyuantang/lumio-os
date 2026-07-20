@@ -13,6 +13,7 @@ import (
 
 	"lumio-os/server/internal/httpapi"
 	"lumio-os/server/internal/journal"
+	"lumio-os/server/internal/network"
 	"lumio-os/server/internal/services"
 	"lumio-os/server/internal/system"
 	"lumio-os/server/internal/terminal"
@@ -62,6 +63,10 @@ func runAgent(args []string) {
 		log.Printf("agent: journalctl not found; journal capability disabled")
 	}
 	terminals := terminal.NewManager()
+	networkReader := network.NewReader()
+	if !networkReader.Available() {
+		log.Printf("agent: Netplan D-Bus not reachable; network capability disabled")
+	}
 
 	hub := wsapi.NewHub(wsapi.Deps{
 		Version:      version,
@@ -77,6 +82,7 @@ func runAgent(args []string) {
 		Sampler:      sampler,
 		Services:     svc,
 		Journal:      jb,
+		Network:      networkReader,
 		WS:           hub,
 		BrokerSocket: *brokerSock,
 	})

@@ -96,7 +96,10 @@ Automatically restore prior configuration
 ```
 
   The timer runs in the broker, not the browser, so a dead client or
-  a severed tunnel cannot prevent the revert. `confirmTimeoutSec` may
+  a severed tunnel cannot prevent the revert. For Netplan, the broker
+  also uses the D-Bus `Try` operation's own automatic rollback and
+  calls `Cancel` when its timer expires, then re-reads the merged
+  revision before accepting another candidate. `confirmTimeoutSec` may
   be set between 30 and 300 s; the default is 90 s. Only one pending
   network or firewall change exists at a time; a second apply while
   one is pending returns `busy`.

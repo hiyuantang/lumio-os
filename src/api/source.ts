@@ -5,6 +5,62 @@ import { MockDataSource } from '../mock/source';
 
 export type ServiceState = 'active' | 'inactive' | 'failed';
 export type ServiceAction = 'start' | 'stop' | 'restart' | 'reload' | 'enable' | 'disable';
+export type PowerAction = 'reboot' | 'poweroff';
+
+export interface PowerSchedule {
+  action: `system.${PowerAction}`;
+  scheduledAt: string;
+}
+
+export interface NetworkRoute {
+  to: string;
+  via: string;
+  metric?: number;
+}
+
+export interface NetworkNameservers {
+  addresses?: string[];
+  search?: string[];
+}
+
+export interface EthernetConfig {
+  dhcp4: boolean;
+  dhcp6: boolean;
+  addresses?: string[];
+  nameservers?: NetworkNameservers;
+  routes?: NetworkRoute[];
+  optional?: boolean;
+}
+
+export interface NetworkConfig {
+  version: 2;
+  ethernets: Record<string, EthernetConfig>;
+}
+
+export interface NetworkInterface {
+  name: string;
+  hardwareAddress?: string;
+  addresses: string[];
+  up: boolean;
+  loopback: boolean;
+}
+
+export interface NetworkSnapshot {
+  revision: string;
+  interfaces: NetworkInterface[];
+}
+
+export interface PendingNetworkChange {
+  token: string;
+  previousRevision: string;
+  expiresAt: string;
+  confirmTimeoutSec: number;
+}
+
+export interface NetworkConfirmation {
+  token: string;
+  confirmed: true;
+}
 
 export interface ServiceUnit {
   name: string;
@@ -188,6 +244,8 @@ export interface SourceCapabilities {
   canTerminal: boolean;
   canWriteFiles: boolean;
   canManageUpdates: boolean;
+  canPowerControl: boolean;
+  canConfigureNetwork: boolean;
 }
 
 export interface SessionUser {
@@ -214,6 +272,10 @@ export interface DataSource {
   uptimeSeconds(): number;
   sampleLoad(): LoadSample;
   subscribeMetrics(onSample: (sample: LoadSample) => void, intervalMs?: number): Unsubscribe;
+  runPowerAction(action: PowerAction): Promise<PowerSchedule>;
+  getNetworkSnapshot(): Promise<NetworkSnapshot>;
+  applyNetworkConfig(config: NetworkConfig, expectedRevision: string, confirmTimeoutSec?: number): Promise<PendingNetworkChange>;
+  confirmNetworkConfig(token: string): Promise<NetworkConfirmation>;
 
   listServices(): Promise<ServiceUnit[]>;
   getServiceDetail(name: string): Promise<ServiceDetail>;

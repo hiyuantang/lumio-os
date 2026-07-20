@@ -14,6 +14,7 @@ import (
 	"lumio-os/server/internal/broker"
 	"lumio-os/server/internal/files"
 	"lumio-os/server/internal/journal"
+	"lumio-os/server/internal/network"
 	"lumio-os/server/internal/privfiles"
 	"lumio-os/server/internal/services"
 	"lumio-os/server/internal/system"
@@ -48,6 +49,130 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	WriteData(w, s.deps.Sampler.Sample())
+}
+
+func (s *Server) handleSystemPower(w http.ResponseWriter, r *http.Request) {
+	if s.deps.BrokerSocket == "" {
+		s.handleUnavailable(w, r)
+		return
+	}
+	var req struct {
+		RequestID string `json:"requestId"`
+		Action    string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return
+	}
+	if req.Action != "reboot" && req.Action != "poweroff" {
+		WriteError(w, NewError(CodeValidationFailed, "action must be reboot or poweroff."))
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"requestId":    req.RequestID,
+		"action":       "system." + req.Action,
+		"arguments":    map[string]any{},
+		"expected":     map[string]any{},
+		"sessionToken": r.Header.Get("X-Lumio-Session"),
+	})
+	s.forwardBrokerAction(w, r, payload, 15*time.Second)
+}
+
+func (s *Server) handleNetworkSnapshot(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Network == nil || !s.deps.Network.Available() {
+		s.handleUnavailable(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	snapshot, err := s.deps.Network.Snapshot(ctx)
+	if err != nil {
+		WriteError(w, NewError(CodeUnavailable, "Network configuration is unavailable."))
+		return
+	}
+	WriteData(w, snapshot)
+}
+
+func (s *Server) handleNetworkApply(w http.ResponseWriter, r *http.Request) {
+	if s.deps.BrokerSocket == "" {
+		s.handleUnavailable(w, r)
+		return
+	}
+	var req struct {
+		RequestID        string         `json:"requestId"`
+		Config           network.Config `json:"config"`
+		ExpectedRevision string         `json:"expectedRevision"`
+		ConfirmTimeout   int            `json:"confirmTimeoutSec"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return
+	}
+	if !network.ValidRevision(req.ExpectedRevision) {
+		WriteError(w, NewError(CodeValidationFailed, "expectedRevision is required."))
+		return
+	}
+	if req.ConfirmTimeout == 0 {
+		req.ConfirmTimeout = network.DefaultConfirmTimeout
+	}
+	if req.ConfirmTimeout < network.MinConfirmTimeout || req.ConfirmTimeout > network.MaxConfirmTimeout {
+		WriteError(w, NewError(CodeValidationFailed, "confirmTimeoutSec must be between 30 and 300."))
+		return
+	}
+	if err := network.ValidateConfig(req.Config); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, err.Error()))
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"requestId": req.RequestID,
+		"action":    "network.applyWithRollback",
+		"arguments": map[string]any{
+			"config":            req.Config,
+			"confirmTimeoutSec": req.ConfirmTimeout,
+		},
+		"expected":     map[string]any{"revision": req.ExpectedRevision},
+		"sessionToken": r.Header.Get("X-Lumio-Session"),
+	})
+	s.forwardBrokerAction(w, r, payload, 45*time.Second)
+}
+
+func (s *Server) handleNetworkConfirm(w http.ResponseWriter, r *http.Request) {
+	if s.deps.BrokerSocket == "" {
+		s.handleUnavailable(w, r)
+		return
+	}
+	var req struct {
+		RequestID string `json:"requestId"`
+		Token     string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return
+	}
+	if !networkConfirmToken.MatchString(req.Token) {
+		WriteError(w, NewError(CodeValidationFailed, "token must be a network confirmation token."))
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"requestId":    req.RequestID,
+		"action":       "network.confirm",
+		"arguments":    map[string]any{"token": req.Token},
+		"expected":     map[string]any{},
+		"sessionToken": r.Header.Get("X-Lumio-Session"),
+	})
+	s.forwardBrokerAction(w, r, payload, 15*time.Second)
 }
 
 func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +387,7 @@ func (s *Server) handleFilesWritePrivileged(w http.ResponseWriter, r *http.Reque
 
 var actionNamePattern = regexp.MustCompile(`^(start|stop|restart|reload|enable|disable)$`)
 var actionUnitPattern = regexp.MustCompile(`^[a-zA-Z0-9@:._\-]+\.service$`)
+var networkConfirmToken = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func (s *Server) handleServicesAction(w http.ResponseWriter, r *http.Request) {
 	if s.deps.BrokerSocket == "" {

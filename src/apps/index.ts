@@ -3,8 +3,10 @@ import type { ComponentType } from 'react';
 import { Files } from './Files';
 import { Home } from './Home';
 import { Logs } from './Logs';
+import { Network } from './Network';
 import type { AppId } from './registry';
 import { Services } from './Services';
+import { Settings } from './Settings';
 import { Terminal } from './Terminal';
 import { Updates } from './Updates';
 
@@ -15,4 +17,6 @@ export const APP_COMPONENTS: Record<AppId, ComponentType> = {
   terminal: Terminal,
   logs: Logs,
   updates: Updates,
+  network: Network,
+  settings: Settings,
 };

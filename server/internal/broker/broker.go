@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"lumio-os/server/internal/ipc"
+	"lumio-os/server/internal/network"
 	"lumio-os/server/internal/privfiles"
 	"lumio-os/server/internal/updates"
 )
@@ -30,6 +31,8 @@ const (
 	servicesManageActionID = "os.lumio.services.manage"
 	packagesApplyActionID  = "os.lumio.packages.apply"
 	filesWriteActionID     = "os.lumio.files.write-privileged"
+	networkApplyActionID   = "os.lumio.network.apply"
+	systemPowerActionID    = "os.lumio.system.power"
 )
 
 var unitNamePattern = regexp.MustCompile(`^[a-zA-Z0-9@:._\-]+\.service$`)
@@ -53,16 +56,29 @@ var fileActions = map[string]bool{
 	"files.writePrivileged": true,
 }
 
+var powerActions = map[string]bool{
+	"system.reboot":   true,
+	"system.poweroff": true,
+}
+
+var networkActions = map[string]bool{
+	"network.applyWithRollback": true,
+	"network.confirm":           true,
+}
+
 type ActionRequest struct {
 	RequestID string `json:"requestId"`
 	Action    string `json:"action"`
 	Arguments struct {
-		Unit          string `json:"unit"`
-		PlanID        string `json:"planId"`
-		Path          string `json:"path"`
-		ContentBase64 string `json:"contentBase64"`
-		Mode          string `json:"mode"`
-		RestartUnit   string `json:"restartUnit"`
+		Unit              string         `json:"unit"`
+		PlanID            string         `json:"planId"`
+		Path              string         `json:"path"`
+		ContentBase64     string         `json:"contentBase64"`
+		Mode              string         `json:"mode"`
+		RestartUnit       string         `json:"restartUnit"`
+		Config            network.Config `json:"config"`
+		ConfirmTimeoutSec int            `json:"confirmTimeoutSec"`
+		Token             string         `json:"token"`
 	} `json:"arguments"`
 	Expected *struct {
 		ActiveState string `json:"activeState"`
@@ -91,6 +107,15 @@ type systemdIface interface {
 	execute(ctx context.Context, action, unit string) (UnitState, error)
 }
 
+type powerIface interface {
+	schedule(ctx context.Context, action string, at time.Time) error
+}
+
+type networkIface interface {
+	Apply(ctx context.Context, config network.Config, expectedRevision string, timeoutSec int) (network.Pending, error)
+	Confirm(ctx context.Context, token string) (network.Pending, error)
+}
+
 type Server struct {
 	cfg      Config
 	audit    *Audit
@@ -98,6 +123,8 @@ type Server struct {
 	sys      systemdIface
 	updates  *updates.Worker
 	files    *privfiles.Writer
+	power    powerIface
+	network  networkIface
 	sessiond *http.Client
 
 	unitLocks sync.Map
@@ -108,9 +135,17 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open audit db: %w", err)
 	}
-	sys, err := newSystemdClient()
-	if err != nil {
-		log.Printf("broker: systemd D-Bus unavailable: %v", err)
+	sys, sysErr := newSystemdClient()
+	if sysErr != nil {
+		log.Printf("broker: systemd D-Bus unavailable: %v", sysErr)
+	}
+	power, powerErr := newPowerClient()
+	if powerErr != nil {
+		log.Printf("broker: logind D-Bus unavailable: %v", powerErr)
+	}
+	networkController, networkErr := network.NewController()
+	if networkErr != nil {
+		log.Printf("broker: Netplan D-Bus unavailable: %v", networkErr)
 	}
 	authz := cfg.Authorizer
 	if authz == nil {
@@ -128,8 +163,14 @@ func New(cfg Config) (*Server, error) {
 		updates:  updates.NewWorker(),
 		files:    privfiles.NewWriter(rollbackDir),
 	}
-	if err == nil {
+	if sysErr == nil {
 		s.sys = sys
+	}
+	if powerErr == nil {
+		s.power = power
+	}
+	if networkErr == nil {
+		s.network = networkController
 	}
 	return s, nil
 }
@@ -193,6 +234,14 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, http.StatusServiceUnavailable, &apiError{Code: "unavailable", Message: "the package manager is unavailable"})
 		return
 	}
+	if powerActions[req.Action] && s.power == nil {
+		s.writeErr(w, http.StatusServiceUnavailable, &apiError{Code: "unavailable", Message: "system power control is unavailable"})
+		return
+	}
+	if networkActions[req.Action] && s.network == nil {
+		s.writeErr(w, http.StatusServiceUnavailable, &apiError{Code: "unavailable", Message: "network configuration is unavailable"})
+		return
+	}
 
 	if status, body, ok := s.audit.StoredResult(req.RequestID); ok {
 		w.Header().Set("X-Lumio-Idempotent-Replay", "true")
@@ -228,7 +277,85 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		s.handleUpdateAction(w, r, req, uid, userName, polkitResult)
 		return
 	}
+	if powerActions[req.Action] {
+		s.handlePowerAction(w, r, req, uid, userName, polkitResult)
+		return
+	}
+	if networkActions[req.Action] {
+		s.handleNetworkAction(w, r, req, uid, userName, polkitResult)
+		return
+	}
 	s.handlePrivilegedFileAction(w, r, req, uid, userName, polkitResult)
+}
+
+func (s *Server) handleNetworkAction(w http.ResponseWriter, r *http.Request, req ActionRequest, uid uint32, userName, polkitResult string) {
+	beginID := s.audit.Begin(req, uid, userName, polkitResult)
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	var pending network.Pending
+	var err error
+	if req.Action == "network.applyWithRollback" {
+		pending, err = s.network.Apply(ctx, req.Arguments.Config, req.Expected.Revision, req.Arguments.ConfirmTimeoutSec)
+	} else {
+		pending, err = s.network.Confirm(ctx, req.Arguments.Token)
+	}
+	if err != nil {
+		status := http.StatusInternalServerError
+		apiErr := &apiError{Code: "internal", Message: "The network change failed."}
+		switch {
+		case errors.Is(err, network.ErrValidation):
+			status = http.StatusBadRequest
+			apiErr = &apiError{Code: "validation_failed", Message: err.Error()}
+		case errors.Is(err, network.ErrBusy):
+			status = http.StatusConflict
+			apiErr = &apiError{Code: "busy", Message: "Another network change is waiting for confirmation."}
+		case errors.Is(err, network.ErrExpired):
+			status = http.StatusConflict
+			apiErr = &apiError{Code: "conflict", Message: "The network confirmation window expired and the previous configuration was restored."}
+		case errors.Is(err, network.ErrToken):
+			status = http.StatusBadRequest
+			apiErr = &apiError{Code: "validation_failed", Message: "The network confirmation token is invalid."}
+		default:
+			var stale *network.StaleError
+			if errors.As(err, &stale) {
+				status = http.StatusConflict
+				apiErr = &apiError{
+					Code:    "stale_revision",
+					Message: "The Netplan configuration changed since it was read.",
+					Details: map[string]any{"expectedRevision": stale.Expected, "actualRevision": stale.Actual},
+				}
+			}
+		}
+		s.audit.End(beginID, req, uid, userName, polkitResult, "failed", err.Error(), nil, time.Since(started))
+		s.writeErr(w, status, apiErr)
+		return
+	}
+	result := map[string]any{"token": pending.Token}
+	if req.Action == "network.applyWithRollback" {
+		result["previousRevision"] = pending.PreviousRevision
+		result["expiresAt"] = pending.ExpiresAt.Format(time.RFC3339Nano)
+		result["confirmTimeoutSec"] = pending.ConfirmTimeout
+	} else {
+		result["confirmed"] = true
+	}
+	s.audit.End(beginID, req, uid, userName, polkitResult, "success", "", result, time.Since(started))
+	s.writeData(w, result)
+}
+
+func (s *Server) handlePowerAction(w http.ResponseWriter, r *http.Request, req ActionRequest, uid uint32, userName, polkitResult string) {
+	beginID := s.audit.Begin(req, uid, userName, polkitResult)
+	started := time.Now()
+	scheduledAt := time.Now().UTC().Add(5 * time.Second)
+	if err := s.power.schedule(r.Context(), req.Action, scheduledAt); err != nil {
+		apiErr := &apiError{Code: "internal", Message: "The power action could not be scheduled."}
+		s.audit.End(beginID, req, uid, userName, polkitResult, "failed", err.Error(), nil, time.Since(started))
+		s.writeErr(w, http.StatusInternalServerError, apiErr)
+		return
+	}
+	result := map[string]any{"action": req.Action, "scheduledAt": scheduledAt.Format(time.RFC3339Nano)}
+	s.audit.End(beginID, req, uid, userName, polkitResult, "success", "", result, time.Since(started))
+	s.writeData(w, result)
 }
 
 func (s *Server) handlePrivilegedFileAction(w http.ResponseWriter, r *http.Request, req ActionRequest, uid uint32, userName, polkitResult string) {
@@ -417,6 +544,14 @@ func (s *Server) authorize(ctx context.Context, uid, pid uint32, req ActionReque
 		actionID = filesWriteActionID
 		details = map[string]string{"path": req.Arguments.Path}
 	}
+	if powerActions[req.Action] {
+		actionID = systemPowerActionID
+		details = map[string]string{"action": req.Action}
+	}
+	if networkActions[req.Action] {
+		actionID = networkApplyActionID
+		details = map[string]string{"action": req.Action}
+	}
 	result, err := s.authz.Check(ctx, uid, pid, actionID, details)
 	if err != nil {
 		log.Printf("broker: authz check failed: %v", err)
@@ -483,7 +618,7 @@ func (req *ActionRequest) validate() *apiError {
 	if req.RequestID == "" || len(req.RequestID) > 128 {
 		return &apiError{Code: "validation_failed", Message: "requestId is required."}
 	}
-	if !serviceActions[req.Action] && !updateActions[req.Action] && !fileActions[req.Action] {
+	if !serviceActions[req.Action] && !updateActions[req.Action] && !fileActions[req.Action] && !powerActions[req.Action] && !networkActions[req.Action] {
 		return &apiError{Code: "validation_failed", Message: "unknown action."}
 	}
 	if serviceActions[req.Action] && !unitNamePattern.MatchString(req.Arguments.Unit) {
@@ -522,12 +657,30 @@ func (req *ActionRequest) validate() *apiError {
 			return &apiError{Code: "validation_failed", Message: "invalid restart unit."}
 		}
 	}
+	if req.Action == "network.applyWithRollback" {
+		if req.Expected == nil || !network.ValidRevision(req.Expected.Revision) {
+			return &apiError{Code: "validation_failed", Message: "expected revision is required."}
+		}
+		if req.Arguments.ConfirmTimeoutSec == 0 {
+			req.Arguments.ConfirmTimeoutSec = network.DefaultConfirmTimeout
+		}
+		if err := network.ValidateConfig(req.Arguments.Config); err != nil {
+			return &apiError{Code: "validation_failed", Message: err.Error()}
+		}
+		if req.Arguments.ConfirmTimeoutSec < network.MinConfirmTimeout || req.Arguments.ConfirmTimeoutSec > network.MaxConfirmTimeout {
+			return &apiError{Code: "validation_failed", Message: "confirm timeout must be between 30 and 300 seconds."}
+		}
+	}
+	if req.Action == "network.confirm" && !networkTokenPattern.MatchString(req.Arguments.Token) {
+		return &apiError{Code: "validation_failed", Message: "invalid network confirmation token."}
+	}
 	return nil
 }
 
 var planIDPattern = regexp.MustCompile(`^pln_[a-f0-9]{24}$`)
 var revisionPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var modePattern = regexp.MustCompile(`^0[0-6][0-4][0-4]$`)
+var networkTokenPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func validPlanID(value string) bool {
 	return planIDPattern.MatchString(value)
