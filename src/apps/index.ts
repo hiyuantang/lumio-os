@@ -6,6 +6,7 @@ import { Logs } from './Logs';
 import type { AppId } from './registry';
 import { Services } from './Services';
 import { Terminal } from './Terminal';
+import { Updates } from './Updates';
 
 export const APP_COMPONENTS: Record<AppId, ComponentType> = {
   home: Home,
@@ -13,4 +14,5 @@ export const APP_COMPONENTS: Record<AppId, ComponentType> = {
   files: Files,
   terminal: Terminal,
   logs: Logs,
+  updates: Updates,
 };

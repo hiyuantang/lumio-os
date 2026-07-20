@@ -42,6 +42,12 @@ interface Viewport {
   h: number;
 }
 
+interface NavigationIntent {
+  target: 'logs' | 'services';
+  unit: string;
+  nonce: number;
+}
+
 interface ShellState {
   user: string | null;
   authReady: boolean;
@@ -55,6 +61,7 @@ interface ShellState {
   paletteOpen: boolean;
   notifOpen: boolean;
   shortcutsOpen: boolean;
+  navigation: NavigationIntent | null;
   viewport: Viewport;
 }
 
@@ -63,6 +70,7 @@ type Action =
   | { type: 'logout' }
   | { type: 'auth-ready' }
   | { type: 'open-app'; appId: AppId }
+  | { type: 'open-related'; target: 'logs' | 'services'; unit: string }
   | { type: 'close-app'; appId: AppId }
   | { type: 'close-focused' }
   | { type: 'focus-app'; appId: AppId }
@@ -120,6 +128,7 @@ function reducer(state: ShellState, action: Action): ShellState {
         paletteOpen: false,
         notifOpen: false,
         shortcutsOpen: false,
+        navigation: null,
       };
     case 'auth-ready':
       return { ...state, authReady: true };
@@ -158,6 +167,17 @@ function reducer(state: ShellState, action: Action): ShellState {
         zTop: z,
         focused: action.appId,
         windows: { ...state.windows, [action.appId]: win },
+      };
+    }
+    case 'open-related': {
+      const opened = reducer(state, { type: 'open-app', appId: action.target });
+      return {
+        ...opened,
+        navigation: {
+          target: action.target,
+          unit: action.unit,
+          nonce: (state.navigation?.nonce ?? 0) + 1,
+        },
       };
     }
     case 'close-app': {
@@ -310,6 +330,7 @@ function initState(): ShellState {
     paletteOpen: false,
     notifOpen: false,
     shortcutsOpen: false,
+    navigation: null,
     viewport,
   };
 }
@@ -318,6 +339,8 @@ export interface ShellActions {
   login(user: string): void;
   logout(): void;
   openApp(appId: AppId): void;
+  openLogs(unit: string): void;
+  openService(unit: string): void;
   closeApp(appId: AppId): void;
   focusApp(appId: AppId): void;
   minimizeApp(appId: AppId): void;
@@ -449,6 +472,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
         }
       },
       openApp: (appId) => dispatch({ type: 'open-app', appId }),
+      openLogs: (unit) => dispatch({ type: 'open-related', target: 'logs', unit }),
+      openService: (unit) => dispatch({ type: 'open-related', target: 'services', unit }),
       closeApp: (appId) => dispatch({ type: 'close-app', appId }),
       focusApp: (appId) => dispatch({ type: 'focus-app', appId }),
       minimizeApp: (appId) => dispatch({ type: 'minimize-app', appId }),

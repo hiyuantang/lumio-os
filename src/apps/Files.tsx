@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { base64ToBytes, bytesToBase64, textToBase64 } from '../api/encoding';
-import { describeError, getDataSource, type FsEntry } from '../api/source';
+import { describeError, getDataSource, type FsEntry, type PrivilegedFileWrite } from '../api/source';
 import { ApiError } from '../api/transport';
 import { formatSize } from '../mock/filesystem';
 import { useShell } from '../shell/ShellContext';
@@ -27,6 +27,18 @@ interface EditorState {
   conflict: { expected: string; actual: string } | null;
 }
 
+interface SystemEditorState {
+  path: string;
+  original: string | null;
+  content: string;
+  revision: string | null;
+  restartUnit: string;
+  loading: boolean;
+  saving: boolean;
+  error: string | null;
+  result: PrivilegedFileWrite | null;
+}
+
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
 export function Files() {
@@ -42,6 +54,7 @@ export function Files() {
   const [deleteTarget, setDeleteTarget] = useState<FsEntry | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [systemEditor, setSystemEditor] = useState<SystemEditorState | null>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -255,6 +268,68 @@ export function Files() {
     }
   }
 
+  function openSystemEditor() {
+    setSystemEditor({
+      path: '/etc/nginx/nginx.conf',
+      original: null,
+      content: '',
+      revision: null,
+      restartUnit: 'nginx.service',
+      loading: false,
+      saving: false,
+      error: null,
+      result: null,
+    });
+  }
+
+  async function loadSystemFile() {
+    const current = systemEditor;
+    if (!current || current.loading) return;
+    setSystemEditor({ ...current, loading: true, error: null, result: null });
+    try {
+      const read = await source.readSystemFile(current.path);
+      if (read.truncated || read.content === null || !read.revision) {
+        throw new Error('This protected file cannot be edited as text.');
+      }
+      const content = read.content;
+      setSystemEditor((prev) => prev ? {
+        ...prev,
+        original: content,
+        content,
+        revision: read.revision,
+        restartUnit: suggestedService(prev.path),
+        loading: false,
+        error: null,
+      } : prev);
+    } catch (err) {
+      setSystemEditor((prev) => prev ? { ...prev, loading: false, error: describeError(err) } : prev);
+    }
+  }
+
+  async function saveSystemFile() {
+    const current = systemEditor;
+    if (!current || current.saving || !current.revision || current.original === current.content) return;
+    setSystemEditor({ ...current, saving: true, error: null, result: null });
+    try {
+      const result = await source.writePrivilegedFile(
+        current.path,
+        textToBase64(current.content),
+        current.revision,
+        current.restartUnit.trim() || undefined,
+      );
+      setSystemEditor((prev) => prev ? {
+        ...prev,
+        original: prev.content,
+        revision: result.revision,
+        saving: false,
+        result,
+      } : prev);
+      actions.notify('Protected file saved', result.restart?.success === false ? 'The file was saved, but its service did not restart.' : 'A rollback copy was kept.');
+    } catch (err) {
+      setSystemEditor((prev) => prev ? { ...prev, saving: false, error: describeError(err) } : prev);
+    }
+  }
+
   return (
     <div className="app files" data-testid="app-files">
       <div className="app-toolbar">
@@ -294,6 +369,9 @@ export function Files() {
         >
           <IconEye size={13} />
           Quick Look
+        </button>
+        <button type="button" className="btn" data-testid="system-file-button" onClick={openSystemEditor}>
+          Edit protected file
         </button>
       </div>
 
@@ -539,6 +617,114 @@ export function Files() {
           </div>
         </div>
       )}
+
+      {systemEditor && (
+        <div className="quicklook-overlay">
+          <div className="system-file-editor" role="dialog" aria-modal="true" aria-label="Edit protected file" data-testid="system-file-editor">
+            <header className="quicklook-header">
+              <IconFile size={16} />
+              <strong>Protected file</strong>
+              <button type="button" className="btn" onClick={() => setSystemEditor(null)}>Close</button>
+            </header>
+            {systemEditor.original === null ? (
+              <div className="system-file-open">
+                <label>
+                  Path
+                  <input
+                    className="system-file-path mono"
+                    data-testid="system-file-path"
+                    value={systemEditor.path}
+                    onChange={(event) => setSystemEditor({ ...systemEditor, path: event.target.value, error: null })}
+                    spellCheck={false}
+                  />
+                </label>
+                <p>Only existing, regular files below /etc can be edited. Symlinks are rejected.</p>
+                {systemEditor.error && <p className="file-editor-error" role="alert">{systemEditor.error}</p>}
+                <button type="button" className="btn btn-primary" data-testid="system-file-open" disabled={systemEditor.loading} onClick={() => void loadSystemFile()}>
+                  {systemEditor.loading ? 'Opening…' : 'Open file'}
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="system-file-controls">
+                  <span className="mono">{systemEditor.path}</span>
+                  <label>
+                    Restart after save
+                    <input
+                      className="system-file-service mono"
+                      value={systemEditor.restartUnit}
+                      onChange={(event) => setSystemEditor({ ...systemEditor, restartUnit: event.target.value })}
+                      placeholder="Optional service unit"
+                      aria-label="Restart service after save"
+                    />
+                  </label>
+                </div>
+                {systemEditor.error && <p className="file-editor-error" role="alert">{systemEditor.error}</p>}
+                {systemEditor.result && (
+                  <p className="system-file-success" role="status" data-testid="system-file-result">
+                    Saved. {systemEditor.result.validation.checked ? `${systemEditor.result.validation.kind} validation passed. ` : ''}Rollback copy kept.
+                    {systemEditor.result.restart?.success === false ? ' Service restart failed.' : ''}
+                  </p>
+                )}
+                <div className="system-file-panes">
+                  <label>
+                    Proposed content
+                    <textarea
+                      className="file-editor-input"
+                      data-testid="system-file-input"
+                      value={systemEditor.content}
+                      onChange={(event) => setSystemEditor({ ...systemEditor, content: event.target.value, result: null })}
+                      spellCheck={false}
+                    />
+                  </label>
+                  <section aria-label="Proposed diff" data-testid="system-file-diff">
+                    <span>Proposed diff</span>
+                    <pre className="system-file-diff">{formatDiff(systemEditor.original, systemEditor.content)}</pre>
+                  </section>
+                </div>
+                <footer className="system-file-footer">
+                  <p>Known formats are validated before the atomic write. A rollback copy is created first.</p>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    data-testid="system-file-save"
+                    disabled={systemEditor.saving || systemEditor.original === systemEditor.content}
+                    onClick={() => void saveSystemFile()}
+                  >
+                    {systemEditor.saving ? 'Validating and saving…' : 'Validate and save'}
+                  </button>
+                </footer>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function suggestedService(path: string): string {
+  if (path.includes('/nginx/')) return 'nginx.service';
+  if (path.includes('/ssh/')) return 'ssh.service';
+  if (path.includes('/systemd/system/')) return '';
+  return '';
+}
+
+function formatDiff(original: string, next: string): string {
+  if (original === next) return 'No changes.';
+  const before = original.split('\n');
+  const after = next.split('\n');
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start++;
+  let beforeEnd = before.length - 1;
+  let afterEnd = after.length - 1;
+  while (beforeEnd >= start && afterEnd >= start && before[beforeEnd] === after[afterEnd]) {
+    beforeEnd--;
+    afterEnd--;
+  }
+  const removed = before.slice(start, beforeEnd + 1).slice(0, 120).map((line) => `- ${line}`);
+  const added = after.slice(start, afterEnd + 1).slice(0, 120).map((line) => `+ ${line}`);
+  const header = `@@ line ${start + 1} @@`;
+  const clipped = beforeEnd - start + 1 > 120 || afterEnd - start + 1 > 120 ? ['… diff truncated …'] : [];
+  return [header, ...removed, ...added, ...clipped].join('\n');
 }

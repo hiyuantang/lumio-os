@@ -51,23 +51,39 @@ const SERVICES = {
   ],
 };
 
+const SERVICE_DETAIL = {
+  name: 'nginx.service',
+  documentation: ['man:nginx(8)'],
+  dependencies: [
+    { name: 'network.target', relation: 'requires' },
+    { name: 'system.slice', relation: 'wants' },
+  ],
+  files: [
+    {
+      path: '/usr/lib/systemd/system/nginx.service',
+      content: '[Service]\nExecStart=/usr/sbin/nginx -g daemon off;',
+      override: false,
+    },
+  ],
+};
+
 const JOURNAL = {
   entries: [
     {
       cursor: 'cursor-1',
-      ts: '2026-07-19T00:10:02.113Z',
+      ts: new Date(Date.now() - 10 * 60_000).toISOString(),
       priority: 'warning',
       unit: 'nginx.service',
       message: 'upstream timed out while reading response header',
-      fields: { _PID: '812' },
+      fields: { _PID: '812', _HOSTNAME: 'atlas-live', _BOOT_ID: 'boot-1', SYSLOG_IDENTIFIER: 'nginx' },
     },
     {
       cursor: 'cursor-2',
-      ts: '2026-07-19T00:11:02.113Z',
+      ts: new Date(Date.now() - 5 * 60_000).toISOString(),
       priority: 'info',
       unit: 'cron.service',
       message: '(root) CMD (run-parts /etc/cron.hourly)',
-      fields: { _PID: '2401' },
+      fields: { _PID: '2401', _HOSTNAME: 'atlas-live', _BOOT_ID: 'boot-1', SYSLOG_IDENTIFIER: 'cron' },
     },
   ],
   nextCursor: 'cursor-3',
@@ -116,6 +132,7 @@ async function stubRest(page: Page) {
   await page.route('**/api/v1/system/identity', (route) => fulfillData(route, IDENTITY));
   await page.route('**/api/v1/system/overview', (route) => fulfillData(route, OVERVIEW));
   await page.route('**/api/v1/system/metrics', (route) => fulfillData(route, METRICS));
+  await page.route('**/api/v1/services/detail**', (route) => fulfillData(route, SERVICE_DETAIL));
   await page.route('**/api/v1/services', (route) => fulfillData(route, SERVICES));
   await page.route('**/api/v1/journal**', (route) => fulfillData(route, JOURNAL));
   await page.route('**/api/v1/files/list**', (route) => fulfillData(route, FILES_LIST));
@@ -148,7 +165,29 @@ test('live mode: home, services, logs and terminal placeholder render from REST 
   await expect(services.getByTestId('service-row-backup.service')).toBeVisible();
   await services.getByTestId('service-row-nginx.service').click();
   await expect(services.getByTestId('service-action-restart')).toBeEnabled();
+  await expect(services.getByTestId('service-action-reload')).toBeEnabled();
   await expect(services.getByTestId('services-actions-note')).toHaveCount(0);
+  await expect(services.getByTestId('service-dependencies')).toContainText('network.target');
+  await expect(services.getByTestId('service-unit-files')).toContainText('/usr/lib/systemd/system/nginx.service');
+
+  await services.getByTestId('service-open-logs').click();
+  const relatedLogs = page.getByTestId('app-logs');
+  await expect(relatedLogs.getByLabel('Filter by unit')).toHaveValue('nginx.service');
+  await relatedLogs.getByTestId('logs-row').first().click();
+  await expect(relatedLogs.getByTestId('logs-detail')).toContainText('SYSLOG_IDENTIFIER');
+  await expect(relatedLogs.getByTestId('logs-detail')).toContainText('nginx');
+  await relatedLogs.getByLabel('Search logs').fill('upstream');
+  await relatedLogs.getByTestId('logs-save-search').click();
+  await expect(relatedLogs.getByLabel('Saved searches')).not.toHaveValue('');
+  const downloadPromise = page.waitForEvent('download');
+  await relatedLogs.getByTestId('logs-export').click();
+  await expect((await downloadPromise).suggestedFilename()).toMatch(/^lumio-journal-.*\.jsonl$/);
+  const previousBootRequest = page.waitForRequest((request) => request.url().includes('/api/v1/journal?') && request.url().includes('boot=previous'));
+  await relatedLogs.getByLabel('Filter by boot').selectOption('previous');
+  await previousBootRequest;
+  await relatedLogs.getByTestId('logs-row').first().click();
+  await relatedLogs.getByTestId('logs-open-service').click();
+  await expect(services.getByTestId('service-row-nginx.service')).toHaveClass(/selected/);
 
   await page.getByTestId('dock-app-logs').click();
   const logs = page.getByTestId('app-logs');

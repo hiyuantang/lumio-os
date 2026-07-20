@@ -90,6 +90,11 @@ func (c *systemdClient) execute(ctx context.Context, action, unit string) (UnitS
 			return UnitState{}, fmt.Errorf("RestartUnit: %v", call.Err)
 		}
 		return c.waitState(ctx, unit, "active")
+	case "services.reload":
+		if call := c.manager().CallWithContext(ctx, sysdManagerIface+".ReloadUnit", 0, unit, "replace"); call.Err != nil {
+			return UnitState{}, fmt.Errorf("ReloadUnit: %v", call.Err)
+		}
+		return c.waitState(ctx, unit, "active")
 	case "services.enable":
 		if call := c.manager().CallWithContext(ctx, sysdManagerIface+".EnableUnitFiles", 0, []string{unit}, false, true); call.Err != nil {
 			return UnitState{}, fmt.Errorf("EnableUnitFiles: %v", call.Err)

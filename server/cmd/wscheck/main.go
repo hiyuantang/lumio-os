@@ -48,7 +48,7 @@ func fail(format string, args ...any) {
 func main() {
 	var o opts
 	flag.StringVar(&o.url, "url", "ws://127.0.0.1:18080/api/v1/ws", "WebSocket endpoint")
-	flag.StringVar(&o.mode, "mode", "metrics", "metrics | services | journal | terminal | terminal-reattach")
+	flag.StringVar(&o.mode, "mode", "metrics", "metrics | services | journal | updates | terminal | terminal-reattach")
 	flag.StringVar(&o.unit, "unit", "cron.service", "unit name for services mode")
 	flag.StringVar(&o.expect, "expect", "", "expected activeState value in services mode (empty: any change)")
 	flag.StringVar(&o.match, "match", "", "substring expected in the observed payload")
@@ -67,7 +67,7 @@ func main() {
 	}
 
 	switch o.mode {
-	case "metrics", "services", "journal":
+	case "metrics", "services", "journal", "updates":
 		runStreamMode(o)
 	case "terminal":
 		runTerminalMode(o)
@@ -148,6 +148,7 @@ func runStreamMode(o opts) {
 		"metrics":  "system.metrics",
 		"services": "services.subscribe",
 		"journal":  "journal.stream",
+		"updates":  "updates.progress",
 	}[o.mode]
 	c := o.dial()
 	defer c.ws.Close()
@@ -158,6 +159,12 @@ func runStreamMode(o opts) {
 	}
 	if o.mode == "journal" && o.unit != "" {
 		params["unit"] = o.unit
+	}
+	if o.mode == "updates" {
+		if o.match == "" {
+			fail("-match must contain the requestId in updates mode")
+		}
+		params["requestId"] = o.match
 	}
 	c.subscribe(1, capability, params)
 
@@ -220,6 +227,23 @@ func handleStreamEvent(o opts, f frame) {
 		}
 		if o.match == "" || strings.Contains(data.Message, o.match) {
 			pass("journal.stream observed entry %q", truncate(data.Message, 80))
+		}
+	case "updates":
+		var data struct {
+			Percent int    `json:"percent"`
+			Done    bool   `json:"done"`
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(f.Data, &data); err != nil {
+			fail("bad updates event: %v", err)
+		}
+		fmt.Printf("WSCHECK updates progress %d%% %s\n", data.Percent, data.Message)
+		if data.Done {
+			if data.Success {
+				pass("updates.progress completed successfully")
+			}
+			fail("updates.progress completed with failure: %s", data.Message)
 		}
 	}
 }

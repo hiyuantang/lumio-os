@@ -4,7 +4,7 @@ import { ApiError } from './transport';
 import { MockDataSource } from '../mock/source';
 
 export type ServiceState = 'active' | 'inactive' | 'failed';
-export type ServiceAction = 'start' | 'stop' | 'restart' | 'enable' | 'disable';
+export type ServiceAction = 'start' | 'stop' | 'restart' | 'reload' | 'enable' | 'disable';
 
 export interface ServiceUnit {
   name: string;
@@ -14,6 +14,25 @@ export interface ServiceUnit {
   pid: number | null;
   memoryMb: number;
   since: string;
+}
+
+export interface ServiceDependency {
+  name: string;
+  relation: 'requires' | 'wants';
+}
+
+export interface ServiceUnitFile {
+  path: string;
+  content: string | null;
+  override: boolean;
+  error: string | null;
+}
+
+export interface ServiceDetail {
+  name: string;
+  documentation: string[];
+  dependencies: ServiceDependency[];
+  files: ServiceUnitFile[];
 }
 
 export interface SystemAlert {
@@ -64,13 +83,19 @@ export interface LogLine {
   message: string;
   pid: number;
   hostname: string;
+  bootId: string;
+  fields: Record<string, string>;
 }
+
+export type JournalBoot = 'current' | 'previous';
 
 export interface JournalQuery {
   unit?: string;
   priority?: LogPriority;
+  since?: string;
+  boot?: JournalBoot;
   limit?: number;
-  before?: string;
+  after?: string;
 }
 
 export interface JournalPage {
@@ -100,6 +125,44 @@ export interface FileWrite {
   sizeBytes: number;
 }
 
+export interface PrivilegedFileWrite extends FileWrite {
+  rollbackRef: string;
+  validation: { kind: string; checked: boolean };
+  restart: { success: boolean; error?: string } | null;
+}
+
+export interface UpdatePackage {
+  name: string;
+  fromVersion: string;
+  toVersion: string;
+  security: boolean;
+  downloadBytes: number;
+  installedDeltaBytes: number;
+}
+
+export interface UpdatePlan {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  packages: UpdatePackage[];
+  securityCount: number;
+  downloadBytes: number;
+  installedDeltaBytes: number;
+  rebootRequired: boolean;
+}
+
+export interface UpdateProgress {
+  requestId: string;
+  planId: string;
+  phase: string;
+  percent: number;
+  message: string;
+  done: boolean;
+  success: boolean;
+  error?: string;
+  updatedAt: string;
+}
+
 export interface TerminalOpenOptions {
   cols: number;
   rows: number;
@@ -124,6 +187,7 @@ export interface SourceCapabilities {
   canServiceActions: boolean;
   canTerminal: boolean;
   canWriteFiles: boolean;
+  canManageUpdates: boolean;
 }
 
 export interface SessionUser {
@@ -152,6 +216,7 @@ export interface DataSource {
   subscribeMetrics(onSample: (sample: LoadSample) => void, intervalMs?: number): Unsubscribe;
 
   listServices(): Promise<ServiceUnit[]>;
+  getServiceDetail(name: string): Promise<ServiceDetail>;
   subscribeServices(onChange: (units: ServiceUnit[]) => void): Unsubscribe;
   runServiceAction(name: string, action: ServiceAction, expectedActiveState?: string): Promise<ServiceUnit>;
 
@@ -162,8 +227,15 @@ export interface DataSource {
   homePath(): string[];
   listDir(path: string[]): Promise<FsEntry[]>;
   readFile(path: string[]): Promise<FileRead>;
+  readSystemFile(path: string): Promise<FileRead>;
   writeFile(path: string[], contentBase64: string, expectedRevision: string | null): Promise<FileWrite>;
+  writePrivilegedFile(path: string, contentBase64: string, expectedRevision: string, restartUnit?: string): Promise<PrivilegedFileWrite>;
   deleteFile(path: string[]): Promise<void>;
+
+  refreshUpdates(): Promise<string>;
+  calculateUpdatePlan(): Promise<UpdatePlan>;
+  applyUpdatePlan(planId: string): Promise<string>;
+  subscribeUpdateProgress(requestId: string, onProgress: (progress: UpdateProgress) => void, onError?: (err: Error) => void): Unsubscribe;
 
   openTerminal(opts: TerminalOpenOptions, handlers: TerminalHandlers): TerminalSession;
 }

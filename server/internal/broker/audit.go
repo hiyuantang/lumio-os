@@ -106,3 +106,9 @@ func (a *Audit) StoredResult(requestID string) (int, string, bool) {
 	}
 	return 0, "", false
 }
+
+func (a *Audit) RequestOwned(requestID string, uid uint32) bool {
+	var found int
+	err := a.db.QueryRow(`SELECT 1 FROM audit WHERE request_id = ? AND uid = ? LIMIT 1`, requestID, uid).Scan(&found)
+	return err == nil && found == 1
+}

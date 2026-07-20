@@ -12,12 +12,16 @@ import type {
   WireJournalPage,
   WireMetricsSample,
   WireOverview,
+  WirePrivilegedFileWrite,
   WireReauth,
   WireServiceActionResult,
+  WireServiceDetail,
   WireServicesEvent,
   WireServicesList,
   WireServiceUnit,
   WireSessionUser,
+  WireUpdatePlan,
+  WireUpdateProgress,
 } from './protocol';
 import type {
   DataSource,
@@ -29,7 +33,9 @@ import type {
   LoadSample,
   LogLine,
   LogPriority,
+  PrivilegedFileWrite,
   ServiceAction,
+  ServiceDetail,
   ServiceUnit,
   SessionUser,
   SourceCapabilities,
@@ -39,6 +45,8 @@ import type {
   TerminalOpenOptions,
   TerminalSession,
   Unsubscribe,
+  UpdatePlan,
+  UpdateProgress,
 } from './source';
 import { ApiError, apiGet, apiPost, apiPut, csrfToken, onSessionExpired as onSessionExpiredListener } from './transport';
 import { LumioSocket } from './ws';
@@ -102,6 +110,8 @@ function mapJournalEntry(entry: WireJournalEntry): LogLine {
     message: entry.message,
     pid: Number.isFinite(pid) ? pid : 0,
     hostname: entry.fields?._HOSTNAME ?? '',
+    bootId: entry.fields?._BOOT_ID ?? '',
+    fields: { ...(entry.fields ?? {}) },
   };
 }
 
@@ -139,6 +149,7 @@ export class LiveDataSource implements DataSource {
     canServiceActions: true,
     canTerminal: true,
     canWriteFiles: true,
+    canManageUpdates: true,
   };
 
   private socket = new LumioSocket();
@@ -285,6 +296,21 @@ export class LiveDataSource implements DataSource {
     return data.units.map(mapServiceUnit);
   }
 
+  async getServiceDetail(name: string): Promise<ServiceDetail> {
+    const detail = await apiGet<WireServiceDetail>('/services/detail', { name });
+    return {
+      name: detail.name,
+      documentation: detail.documentation ?? [],
+      dependencies: detail.dependencies ?? [],
+      files: (detail.files ?? []).map((file) => ({
+        path: file.path,
+        content: file.content ?? null,
+        override: file.override,
+        error: file.error ?? null,
+      })),
+    };
+  }
+
   subscribeServices(onChange: (units: ServiceUnit[]) => void): Unsubscribe {
     const handle = this.socket.subscribe({
       capability: 'services.subscribe',
@@ -335,8 +361,10 @@ export class LiveDataSource implements DataSource {
     const data = await apiGet<WireJournalPage>('/journal', {
       unit: query.unit,
       priority: query.priority,
+      since: query.since,
+      boot: query.boot,
       limit: query.limit,
-      before: query.before,
+      'after-cursor': query.after,
     });
     return { entries: data.entries.map(mapJournalEntry), nextCursor: data.nextCursor };
   }
@@ -395,6 +423,18 @@ export class LiveDataSource implements DataSource {
     };
   }
 
+  async readSystemFile(path: string): Promise<FileRead> {
+    const data = await apiGet<WireFileRead>('/files/read', { path });
+    const content = data.encoding === 'utf-8' || data.encoding === 'ascii' ? base64ToText(data.content) : null;
+    return {
+      content,
+      contentBase64: data.content,
+      revision: data.revision,
+      truncated: data.truncated,
+      sizeBytes: data.sizeBytes,
+    };
+  }
+
   async writeFile(path: string[], contentBase64: string, expectedRevision: string | null): Promise<FileWrite> {
     const data = await apiPut<WireFileWrite>('/files/write', {
       path: joinUnderHome(this.homeDir, path),
@@ -405,11 +445,63 @@ export class LiveDataSource implements DataSource {
     return { revision: data.revision, sizeBytes: data.sizeBytes };
   }
 
+  async writePrivilegedFile(
+    path: string,
+    contentBase64: string,
+    expectedRevision: string,
+    restartUnit?: string,
+  ): Promise<PrivilegedFileWrite> {
+    const data = await apiPost<WirePrivilegedFileWrite>('/files/write-privileged', {
+      path,
+      content: contentBase64,
+      expectedRevision,
+      ...(restartUnit ? { restartUnit } : {}),
+      requestId: crypto.randomUUID(),
+    });
+    return {
+      revision: data.file.revision,
+      sizeBytes: data.file.sizeBytes,
+      rollbackRef: data.file.rollbackRef,
+      validation: data.file.validation,
+      restart: data.restart ?? null,
+    };
+  }
+
   async deleteFile(path: string[]): Promise<void> {
     await apiPost<{ trashed: boolean }>('/files/delete', {
       path: joinUnderHome(this.homeDir, path),
       requestId: crypto.randomUUID(),
     });
+  }
+
+  async refreshUpdates(): Promise<string> {
+    const data = await apiPost<{ refreshedAt: string }>('/updates/refresh', { requestId: crypto.randomUUID() });
+    return data.refreshedAt;
+  }
+
+  async calculateUpdatePlan(): Promise<UpdatePlan> {
+    const data = await apiPost<{ plan: WireUpdatePlan }>('/updates/plan', { requestId: crypto.randomUUID() });
+    return data.plan;
+  }
+
+  async applyUpdatePlan(planId: string): Promise<string> {
+    const requestId = crypto.randomUUID();
+    const data = await apiPost<{ requestId: string }>('/updates/apply', { requestId, planId });
+    return data.requestId;
+  }
+
+  subscribeUpdateProgress(
+    requestId: string,
+    onProgress: (progress: UpdateProgress) => void,
+    onError?: (err: Error) => void,
+  ): Unsubscribe {
+    const handle = this.socket.subscribe({
+      capability: 'updates.progress',
+      params: () => ({ requestId }),
+      onEvent: (data) => onProgress(data as WireUpdateProgress),
+      onError: (err) => onError?.(err),
+    });
+    return handle.close;
   }
 
   openTerminal(opts: TerminalOpenOptions, handlers: TerminalHandlers): TerminalSession {

@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"lumio-os/server/internal/broker"
 	"lumio-os/server/internal/files"
 	"lumio-os/server/internal/journal"
+	"lumio-os/server/internal/privfiles"
 	"lumio-os/server/internal/services"
 	"lumio-os/server/internal/system"
 )
@@ -66,6 +68,35 @@ func (s *Server) handleServices(w http.ResponseWriter, r *http.Request) {
 	WriteData(w, map[string]any{"units": units})
 }
 
+func (s *Server) handleServiceDetail(w http.ResponseWriter, r *http.Request) {
+	if !s.deps.Services.Available() {
+		WriteError(w, services.ErrUnavailable)
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if !actionUnitPattern.MatchString(name) {
+		WriteError(w, NewError(CodeValidationFailed, "invalid unit name."))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	detail, err := s.deps.Services.Detail(ctx, name)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	if detail.Documentation == nil {
+		detail.Documentation = []string{}
+	}
+	if detail.Dependencies == nil {
+		detail.Dependencies = []services.Dependency{}
+	}
+	if detail.Files == nil {
+		detail.Files = []services.UnitFile{}
+	}
+	WriteData(w, detail)
+}
+
 func (s *Server) handleJournal(w http.ResponseWriter, r *http.Request) {
 	if !s.deps.Journal.Available() {
 		WriteError(w, journal.ErrUnavailable)
@@ -76,6 +107,7 @@ func (s *Server) handleJournal(w http.ResponseWriter, r *http.Request) {
 		Unit:     values.Get("unit"),
 		Priority: values.Get("priority"),
 		Since:    values.Get("since"),
+		Boot:     values.Get("boot"),
 		After:    values.Get("after-cursor"),
 	}
 	if raw := values.Get("limit"); raw != "" {
@@ -175,7 +207,60 @@ func (s *Server) handleFilesDelete(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-var actionNamePattern = regexp.MustCompile(`^(start|stop|restart|enable|disable)$`)
+func (s *Server) handleFilesWritePrivileged(w http.ResponseWriter, r *http.Request) {
+	if s.deps.BrokerSocket == "" {
+		s.handleUnavailable(w, r)
+		return
+	}
+	var req struct {
+		Path             string `json:"path"`
+		Content          string `json:"content"`
+		ExpectedRevision string `json:"expectedRevision"`
+		Mode             string `json:"mode"`
+		RestartUnit      string `json:"restartUnit"`
+		RequestID        string `json:"requestId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return
+	}
+	if req.Path == "" || !strings.HasPrefix(req.Path, "/etc/") {
+		WriteError(w, NewError(CodeValidationFailed, "path must be below /etc."))
+		return
+	}
+	content, err := base64.StdEncoding.DecodeString(req.Content)
+	if err != nil || len(content) > privfiles.MaxWriteBytes {
+		WriteError(w, NewError(CodeValidationFailed, "content must be base64 and no larger than 1 MiB."))
+		return
+	}
+	if !regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(req.ExpectedRevision) {
+		WriteError(w, NewError(CodeValidationFailed, "expectedRevision is required."))
+		return
+	}
+	if req.RestartUnit != "" && !actionUnitPattern.MatchString(req.RestartUnit) {
+		WriteError(w, NewError(CodeValidationFailed, "invalid restart unit."))
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"requestId": req.RequestID,
+		"action":    "files.writePrivileged",
+		"arguments": map[string]any{
+			"path":          req.Path,
+			"contentBase64": req.Content,
+			"mode":          req.Mode,
+			"restartUnit":   req.RestartUnit,
+		},
+		"expected":     map[string]any{"revision": req.ExpectedRevision},
+		"sessionToken": r.Header.Get("X-Lumio-Session"),
+	})
+	s.forwardBrokerAction(w, r, payload, 45*time.Second)
+}
+
+var actionNamePattern = regexp.MustCompile(`^(start|stop|restart|reload|enable|disable)$`)
 var actionUnitPattern = regexp.MustCompile(`^[a-zA-Z0-9@:._\-]+\.service$`)
 
 func (s *Server) handleServicesAction(w http.ResponseWriter, r *http.Request) {
@@ -221,7 +306,97 @@ func (s *Server) handleServicesAction(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, NewError(CodeInternal, "Internal server error."))
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	s.forwardBrokerAction(w, r, encoded, 30*time.Second)
+}
+
+func (s *Server) handleUpdatesRefresh(w http.ResponseWriter, r *http.Request) {
+	if s.deps.BrokerSocket == "" {
+		s.handleUnavailable(w, r)
+		return
+	}
+	requestID, ok := decodeUpdateRequest(w, r)
+	if !ok {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"requestId":    requestID,
+		"action":       "updates.refresh",
+		"arguments":    map[string]any{},
+		"sessionToken": r.Header.Get("X-Lumio-Session"),
+	})
+	s.forwardBrokerAction(w, r, payload, 11*time.Minute)
+}
+
+func (s *Server) handleUpdatesPlan(w http.ResponseWriter, r *http.Request) {
+	if s.deps.BrokerSocket == "" {
+		s.handleUnavailable(w, r)
+		return
+	}
+	requestID, ok := decodeUpdateRequest(w, r)
+	if !ok {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"requestId":    requestID,
+		"action":       "updates.plan",
+		"arguments":    map[string]any{},
+		"sessionToken": r.Header.Get("X-Lumio-Session"),
+	})
+	s.forwardBrokerAction(w, r, payload, 3*time.Minute)
+}
+
+func (s *Server) handleUpdatesApply(w http.ResponseWriter, r *http.Request) {
+	if s.deps.BrokerSocket == "" {
+		s.handleUnavailable(w, r)
+		return
+	}
+	var req struct {
+		RequestID string `json:"requestId"`
+		PlanID    string `json:"planId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return
+	}
+	if !regexp.MustCompile(`^pln_[a-f0-9]{24}$`).MatchString(req.PlanID) {
+		WriteError(w, NewError(CodeValidationFailed, "invalid planId."))
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"requestId":    req.RequestID,
+		"action":       "packages.applyPlan",
+		"arguments":    map[string]any{"planId": req.PlanID},
+		"expected":     map[string]any{"planId": req.PlanID},
+		"sessionToken": r.Header.Get("X-Lumio-Session"),
+	})
+	s.forwardBrokerAction(w, r, payload, 30*time.Second)
+}
+
+func decodeUpdateRequest(w http.ResponseWriter, r *http.Request) (string, bool) {
+	var req struct {
+		RequestID string `json:"requestId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		WriteError(w, NewError(CodeValidationFailed, "Body must be a JSON object."))
+		return "", false
+	}
+	if !validRequestID(req.RequestID) {
+		WriteError(w, NewError(CodeValidationFailed, "requestId is required."))
+		return "", false
+	}
+	return req.RequestID, true
+}
+
+func (s *Server) forwardBrokerAction(w http.ResponseWriter, r *http.Request, encoded []byte, timeout time.Duration) {
+	if s.deps.BrokerSocket == "" {
+		WriteError(w, NewError(CodeUnavailable, "This capability is not available in this build."))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	status, headers, body, err := broker.CallAction(ctx, s.deps.BrokerSocket, encoded)
 	if err != nil {

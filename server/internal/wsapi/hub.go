@@ -23,11 +23,12 @@ const (
 )
 
 type Deps struct {
-	Version  string
-	Services services.API
-	Journal  journal.Backend
-	Sampler  *system.Sampler
-	Terminal *terminal.Manager
+	Version      string
+	Services     services.API
+	Journal      journal.Backend
+	Sampler      *system.Sampler
+	Terminal     *terminal.Manager
+	BrokerSocket string
 }
 
 type Hub struct {

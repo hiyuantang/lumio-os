@@ -64,11 +64,12 @@ func runAgent(args []string) {
 	terminals := terminal.NewManager()
 
 	hub := wsapi.NewHub(wsapi.Deps{
-		Version:  version,
-		Services: svc,
-		Journal:  jb,
-		Sampler:  sampler,
-		Terminal: terminals,
+		Version:      version,
+		Services:     svc,
+		Journal:      jb,
+		Sampler:      sampler,
+		Terminal:     terminals,
+		BrokerSocket: *brokerSock,
 	})
 
 	api := httpapi.NewServer(httpapi.Deps{

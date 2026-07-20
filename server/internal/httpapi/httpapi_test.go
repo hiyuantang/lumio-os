@@ -32,6 +32,16 @@ func (f fakeServices) List(context.Context) ([]services.Unit, error) {
 	}
 	return f.units, nil
 }
+func (f fakeServices) Detail(_ context.Context, name string) (services.Detail, error) {
+	if !f.available {
+		return services.Detail{}, services.ErrUnavailable
+	}
+	return services.Detail{
+		Name:         name,
+		Dependencies: []services.Dependency{{Name: "network.target", Relation: "requires"}},
+		Files:        []services.UnitFile{{Path: "/usr/lib/systemd/system/cron.service", Content: "[Service]\nExecStart=/usr/sbin/cron\n"}},
+	}, nil
+}
 func (f fakeServices) SubscribeChanges(context.Context) (<-chan services.Unit, error) {
 	return nil, services.ErrUnavailable
 }
@@ -145,6 +155,23 @@ func TestServicesList(t *testing.T) {
 	}
 }
 
+func TestServiceDetail(t *testing.T) {
+	ts := testServer(fakeServices{available: true}, fakeJournal{})
+	defer ts.Close()
+	status, env := get(t, ts.URL+"/api/v1/services/detail?name=cron.service")
+	if status != 200 || !env.OK {
+		t.Fatalf("status=%d", status)
+	}
+	data := string(env.Data)
+	if !strings.Contains(data, `"name":"cron.service"`) || !strings.Contains(data, `"relation":"requires"`) || !strings.Contains(data, `ExecStart=/usr/sbin/cron`) {
+		t.Errorf("data = %s", data)
+	}
+	status, env = get(t, ts.URL+"/api/v1/services/detail?name=../../etc/passwd")
+	if status != 400 || env.Error == nil || env.Error.Code != CodeValidationFailed {
+		t.Errorf("status=%d env=%+v", status, env)
+	}
+}
+
 func TestJournalQuery(t *testing.T) {
 	ts := testServer(fakeServices{}, fakeJournal{available: true})
 	defer ts.Close()
@@ -165,6 +192,10 @@ func TestJournalValidation(t *testing.T) {
 		t.Errorf("status=%d env=%+v", status, env)
 	}
 	status, env = get(t, ts.URL+"/api/v1/journal?limit=abc")
+	if status != 400 || env.Error == nil || env.Error.Code != CodeValidationFailed {
+		t.Errorf("status=%d env=%+v", status, env)
+	}
+	status, env = get(t, ts.URL+"/api/v1/journal?boot=old")
 	if status != 400 || env.Error == nil || env.Error.Code != CodeValidationFailed {
 		t.Errorf("status=%d env=%+v", status, env)
 	}

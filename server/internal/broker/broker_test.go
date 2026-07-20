@@ -44,6 +44,55 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+func TestReloadIsTypedAndValidated(t *testing.T) {
+	req := ActionRequest{RequestID: "reload-1", Action: "services.reload"}
+	req.Arguments.Unit = "nginx.service"
+	if err := req.validate(); err != nil {
+		t.Fatalf("reload rejected: %v", err)
+	}
+	authz := StaticAuthorizer{Rules: func(uint32, string, map[string]string) Result { return Allow }}
+	_, client, sys := testBroker(t, authz, nil)
+	status, _, body := callAction(t, client, `{"requestId":"reload-1","action":"services.reload","arguments":{"unit":"nginx.service"}}`)
+	if status != 200 {
+		t.Fatalf("status=%d body=%v", status, body)
+	}
+	if len(sys.calls) != 1 || sys.calls[0] != "services.reload nginx.service" {
+		t.Errorf("calls = %v", sys.calls)
+	}
+}
+
+func TestPhase5ActionsAreTypedAndValidated(t *testing.T) {
+	plan := ActionRequest{RequestID: "plan-1", Action: "updates.plan"}
+	if err := plan.validate(); err != nil {
+		t.Fatalf("plan rejected: %v", err)
+	}
+	apply := ActionRequest{RequestID: "apply-1", Action: "packages.applyPlan"}
+	apply.Arguments.PlanID = "pln_000000000000000000000000"
+	apply.Expected = &struct {
+		ActiveState string `json:"activeState"`
+		PlanID      string `json:"planId"`
+		Revision    string `json:"revision"`
+	}{PlanID: apply.Arguments.PlanID}
+	if err := apply.validate(); err != nil {
+		t.Fatalf("apply rejected: %v", err)
+	}
+	file := ActionRequest{RequestID: "file-1", Action: "files.writePrivileged"}
+	file.Arguments.Path = "/etc/example.conf"
+	file.Arguments.ContentBase64 = "dGVzdAo="
+	file.Expected = &struct {
+		ActiveState string `json:"activeState"`
+		PlanID      string `json:"planId"`
+		Revision    string `json:"revision"`
+	}{Revision: "sha256:" + strings.Repeat("0", 64)}
+	if err := file.validate(); err != nil {
+		t.Fatalf("file action rejected: %v", err)
+	}
+	file.Arguments.Path = "/tmp/example.conf"
+	if err := file.validate(); err == nil {
+		t.Fatal("file action accepted a path outside /etc")
+	}
+}
+
 type fakeSystemd struct {
 	calls []string
 	state UnitState

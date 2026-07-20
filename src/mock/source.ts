@@ -9,7 +9,9 @@ import type {
   JournalQuery,
   LoadSample,
   LogLine,
+  PrivilegedFileWrite,
   ServiceAction,
+  ServiceDetail,
   ServiceUnit,
   SessionUser,
   SourceCapabilities,
@@ -19,6 +21,8 @@ import type {
   TerminalOpenOptions,
   TerminalSession,
   Unsubscribe,
+  UpdatePlan,
+  UpdateProgress,
 } from '../api/source';
 import { ApiError } from '../api/transport';
 import {
@@ -33,12 +37,20 @@ import { LOG_UNITS, makeLogLine, seedLogLines } from './journal';
 import {
   getOverview,
   listServices,
+  getServiceDetail,
   runServiceAction,
   sampleLoad,
   subscribeServices,
   uptimeSeconds,
 } from './system';
 import { MockTerminalSession } from './terminal';
+import { readSystemFile, writePrivilegedFile } from './privileged-files';
+import {
+  applyUpdatePlan,
+  calculateUpdatePlan,
+  refreshUpdates,
+  subscribeUpdateProgress,
+} from './updates';
 
 const TICK_MS = 2000;
 
@@ -49,6 +61,7 @@ export class MockDataSource implements DataSource {
     canServiceActions: true,
     canTerminal: true,
     canWriteFiles: true,
+    canManageUpdates: true,
   };
 
   async login(username: string): Promise<SessionUser> {
@@ -100,6 +113,10 @@ export class MockDataSource implements DataSource {
     return listServices();
   }
 
+  async getServiceDetail(name: string): Promise<ServiceDetail> {
+    return getServiceDetail(name);
+  }
+
   subscribeServices(onChange: (units: ServiceUnit[]) => void): Unsubscribe {
     return subscribeServices(() => onChange(listServices()));
   }
@@ -112,6 +129,13 @@ export class MockDataSource implements DataSource {
     let entries = seedLogLines(query.limit ?? 40);
     if (query.unit) entries = entries.filter((line) => line.unit === query.unit);
     if (query.priority) entries = entries.filter((line) => line.priority === query.priority);
+    if (query.since) {
+      const since = Date.parse(query.since);
+      if (Number.isFinite(since)) entries = entries.filter((line) => line.timestamp >= since);
+    }
+    if (query.boot === 'previous') {
+      entries = entries.map((line) => ({ ...line, bootId: 'mock-previous-boot', fields: { ...line.fields, _BOOT_ID: 'mock-previous-boot' } }));
+    }
     return { entries, nextCursor: null };
   }
 
@@ -146,12 +170,41 @@ export class MockDataSource implements DataSource {
     };
   }
 
+  readSystemFile(path: string): Promise<FileRead> {
+    return readSystemFile(path);
+  }
+
   async writeFile(path: string[], contentBase64: string, expectedRevision: string | null): Promise<FileWrite> {
     return writeEntry(path, base64ToText(contentBase64), expectedRevision);
   }
 
+  writePrivilegedFile(
+    path: string,
+    contentBase64: string,
+    expectedRevision: string,
+    restartUnit?: string,
+  ): Promise<PrivilegedFileWrite> {
+    return writePrivilegedFile(path, contentBase64, expectedRevision, restartUnit);
+  }
+
   async deleteFile(path: string[]): Promise<void> {
     deleteEntry(path);
+  }
+
+  refreshUpdates(): Promise<string> {
+    return refreshUpdates();
+  }
+
+  calculateUpdatePlan(): Promise<UpdatePlan> {
+    return calculateUpdatePlan();
+  }
+
+  applyUpdatePlan(planId: string): Promise<string> {
+    return applyUpdatePlan(planId);
+  }
+
+  subscribeUpdateProgress(requestId: string, onProgress: (progress: UpdateProgress) => void): Unsubscribe {
+    return subscribeUpdateProgress(requestId, onProgress);
   }
 
   openTerminal(opts: TerminalOpenOptions, handlers: TerminalHandlers): TerminalSession {

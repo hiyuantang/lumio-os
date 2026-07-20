@@ -5,6 +5,7 @@ import {
   getDataSource,
   isReauthRequired,
   type ServiceAction,
+  type ServiceDetail,
   type ServiceUnit,
 } from '../api/source';
 import { ApiError } from '../api/transport';
@@ -18,6 +19,7 @@ const ACTION_LABEL: Record<ServiceAction, string> = {
   start: 'Start',
   stop: 'Stop',
   restart: 'Restart',
+  reload: 'Reload',
   enable: 'Enable',
   disable: 'Disable',
 };
@@ -26,6 +28,7 @@ const ACTION_DONE: Record<ServiceAction, string> = {
   start: 'started',
   stop: 'stopped',
   restart: 'restarted',
+  reload: 'reloaded',
   enable: 'enabled',
   disable: 'disabled',
 };
@@ -38,6 +41,8 @@ function actionAvailable(unit: ServiceUnit, action: ServiceAction): boolean {
       return unit.state === 'active';
     case 'restart':
       return true;
+    case 'reload':
+      return unit.state === 'active';
     case 'enable':
       return !unit.enabled;
     case 'disable':
@@ -46,7 +51,7 @@ function actionAvailable(unit: ServiceUnit, action: ServiceAction): boolean {
 }
 
 export function Services() {
-  const { actions } = useShell();
+  const { actions, state } = useShell();
   const source = getDataSource();
   const requireReauth = useReauth();
   const canAct = source.capabilities.canServiceActions;
@@ -55,6 +60,9 @@ export function Services() {
   const [retryNonce, setRetryNonce] = useState(0);
   const [query, setQuery] = useState('');
   const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [detail, setDetail] = useState<ServiceDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<ServiceAction | null>(null);
   const [confirm, setConfirm] = useState<{ unit: ServiceUnit; action: ServiceAction } | null>(null);
 
@@ -79,6 +87,12 @@ export function Services() {
     };
   }, [source, retryNonce]);
 
+  useEffect(() => {
+    if (state.navigation?.target === 'services') {
+      setSelectedName(state.navigation.unit);
+    }
+  }, [state.navigation?.nonce, state.navigation?.target, state.navigation?.unit]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return services;
@@ -88,6 +102,36 @@ export function Services() {
   }, [services, query]);
 
   const selected = services.find((s) => s.name === selectedName) ?? filtered[0] ?? null;
+
+  useEffect(() => {
+    const name = selected?.name;
+    if (!name) {
+      setDetail(null);
+      setDetailError(null);
+      return;
+    }
+    let alive = true;
+    setDetailLoading(true);
+    setDetail(null);
+    setDetailError(null);
+    source
+      .getServiceDetail(name)
+      .then((next) => {
+        if (alive) setDetail(next);
+      })
+      .catch((err) => {
+        if (alive) {
+          setDetail(null);
+          setDetailError(describeError(err));
+        }
+      })
+      .finally(() => {
+        if (alive) setDetailLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [selected?.name, source]);
 
   function run(unit: ServiceUnit, action: ServiceAction) {
     setBusyAction(action);
@@ -204,19 +248,71 @@ export function Services() {
                     className={`btn${action === 'restart' ? ' btn-primary' : ''}`}
                     data-testid={`service-action-${action}`}
                     disabled={!canAct || busyAction !== null || !actionAvailable(selected, action)}
-                    title={canAct ? undefined : 'Service actions arrive in a later phase of the server'}
+                    title={canAct ? undefined : 'Service actions are not available on this host'}
                     onClick={() => request(selected, action)}
                   >
                     {busyAction === action ? <span className="spinner" aria-hidden="true" /> : null}
                     {busyAction === action ? 'Working…' : ACTION_LABEL[action]}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="btn"
+                  data-testid="service-open-logs"
+                  onClick={() => actions.openLogs(selected.name)}
+                >
+                  Open logs
+                </button>
               </div>
               {!canAct && (
                 <p className="services-actions-note" data-testid="services-actions-note">
-                  Service actions arrive in a later phase of the server.
+                  Service actions are not available on this host.
                 </p>
               )}
+              <section className="services-section" aria-labelledby="service-dependencies-heading">
+                <h3 id="service-dependencies-heading">Dependencies</h3>
+                {detailLoading && <p className="services-section-empty">Loading dependencies…</p>}
+                {!detailLoading && detailError && <p className="services-section-empty">{detailError}</p>}
+                {!detailLoading && !detailError && detail?.dependencies.length === 0 && (
+                  <p className="services-section-empty">No direct dependencies reported.</p>
+                )}
+                {detail && detail.dependencies.length > 0 && (
+                  <div className="services-dependency-graph" data-testid="service-dependencies">
+                    <span className="services-dependency-root mono">{detail.name}</span>
+                    <div className="services-dependency-edges">
+                      {detail.dependencies.map((dependency) => (
+                        <div className="services-dependency-edge" key={`${dependency.relation}:${dependency.name}`}>
+                          <span>{dependency.relation}</span>
+                          {dependency.name.endsWith('.service') ? (
+                            <button type="button" className="mono" onClick={() => actions.openService(dependency.name)}>
+                              {dependency.name}
+                            </button>
+                          ) : (
+                            <code>{dependency.name}</code>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </section>
+              <section className="services-section" aria-labelledby="service-files-heading">
+                <h3 id="service-files-heading">Unit files and overrides</h3>
+                {!detailLoading && !detailError && detail?.files.length === 0 && (
+                  <p className="services-section-empty">This unit has no file on disk.</p>
+                )}
+                <div className="services-unit-files" data-testid="service-unit-files">
+                  {detail?.files.map((file) => (
+                    <details key={file.path}>
+                      <summary>
+                        <span className="mono">{file.path}</span>
+                        {file.override && <span className="pill">override</span>}
+                      </summary>
+                      {file.error ? <p>{file.error}</p> : <pre>{file.content}</pre>}
+                    </details>
+                  ))}
+                </div>
+              </section>
             </>
           ) : (
             <p className="services-empty">Select a service to see details.</p>

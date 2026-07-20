@@ -17,9 +17,29 @@ type Unit struct {
 	EnabledState string `json:"enabledState,omitempty"`
 }
 
+type Dependency struct {
+	Name     string `json:"name"`
+	Relation string `json:"relation"`
+}
+
+type UnitFile struct {
+	Path     string `json:"path"`
+	Content  string `json:"content,omitempty"`
+	Override bool   `json:"override"`
+	Error    string `json:"error,omitempty"`
+}
+
+type Detail struct {
+	Name          string       `json:"name"`
+	Documentation []string     `json:"documentation"`
+	Dependencies  []Dependency `json:"dependencies"`
+	Files         []UnitFile   `json:"files"`
+}
+
 type API interface {
 	Available() bool
 	List(ctx context.Context) ([]Unit, error)
+	Detail(ctx context.Context, name string) (Detail, error)
 	SubscribeChanges(ctx context.Context) (<-chan Unit, error)
 }
 

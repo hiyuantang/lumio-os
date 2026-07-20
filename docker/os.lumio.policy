@@ -17,6 +17,26 @@
     </defaults>
   </action>
 
+  <action id="os.lumio.packages.apply">
+    <description>Refresh, plan and install software updates through Lumio OS</description>
+    <message>Authentication is required to manage software updates</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
+  <action id="os.lumio.files.write-privileged">
+    <description>Edit protected configuration files through Lumio OS</description>
+    <message>Authentication is required to edit protected configuration files</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
   <action id="os.lumio.system.power">
     <description>Reboot or power off the system through Lumio OS</description>
     <message>Authentication is required to reboot or power off</message>

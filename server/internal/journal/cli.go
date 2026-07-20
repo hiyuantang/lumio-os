@@ -44,6 +44,9 @@ func (c *CLI) Query(ctx context.Context, q Query) (Result, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if q.Boot == "previous" && previousBootUnavailable(stderr.String()) {
+			return Result{Entries: []Entry{}}, nil
+		}
 		return Result{}, cliError(err, stderr.String())
 	}
 	res := Result{Entries: []Entry{}}
@@ -67,6 +70,10 @@ func (c *CLI) Query(ctx context.Context, q Query) (Result, error) {
 		res.NextCursor = res.Entries[n-1].Cursor
 	}
 	return res, nil
+}
+
+func previousBootUnavailable(stderr string) bool {
+	return strings.Contains(stderr, "specified boot") || strings.Contains(stderr, "No such boot ID")
 }
 
 func (c *CLI) Follow(ctx context.Context, q Query, emit func(Entry) bool) error {
@@ -122,6 +129,11 @@ func (c *CLI) args(q Query, follow bool) []string {
 	}
 	if q.Since != "" {
 		args = append(args, "--since", formatSince(q.Since))
+	}
+	if q.Boot == "current" {
+		args = append(args, "--boot=0")
+	} else if q.Boot == "previous" {
+		args = append(args, "--boot=-1")
 	}
 	if q.After != "" {
 		args = append(args, "--after-cursor", q.After)

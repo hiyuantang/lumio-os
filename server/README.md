@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-# lumiod — Lumio OS Phase 2 read-only Ubuntu agent
+# lumiod — Lumio OS Phase 5 server stack
 
 `lumiod` is a single Go binary implementing the Lumio OS server stack from
-[../docs/PROTOCOL.md](../docs/PROTOCOL.md). Phase 4 splits it into the
-documented multi-process architecture via subcommands:
+[../docs/PROTOCOL.md](../docs/PROTOCOL.md). It uses the documented
+multi-process architecture via subcommands:
 
 ```
 lumiod gateway    HTTP/WS + auth + CSRF, unprivileged user (lumio-gw)
@@ -14,15 +14,9 @@ lumiod broker     root: typed privileged actions (polkit + audit)
 
 Processes talk over Unix sockets under `/run/lumio` (see
 [../docs/PRIVILEGE_MODEL.md](../docs/PRIVILEGE_MODEL.md) §As built).
-Running `lumiod` with no subcommand keeps the Phase 2/3 single-process
-mode (no auth) for frontend development.
-
-Phase 2 runs gateway and agent as one process bound to `127.0.0.1`; the
-multi-process split (gateway / per-user agent / privileged broker) arrives
-in Phase 4. Internal packages are already separated along those lines
-(`httpapi`, `wsapi`, `system`, `services`, `journal`, `files`) so the split
-is a wiring change, not a rewrite. Request handling is centralized in
-`httpapi.Server.wrap` so Phase 4 session/CSRF middleware slots in cleanly.
+There is no legacy unauthenticated single-process subcommand. Internal
+packages follow the same boundaries (`httpapi`, `wsapi`, `system`,
+`services`, `journal`, `files`, `updates`, `privfiles`).
 
 ## Dependencies
 
@@ -36,12 +30,11 @@ is a wiring change, not a rewrite. Request handling is centralized in
 
 ## Run on macOS (development)
 
-Single-process mode (no auth, Phase 2/3 surface):
+Build the binary:
 
 ```sh
 cd server
 go build -o lumiod ./cmd/lumiod
-./lumiod -addr 127.0.0.1:8080
 ```
 
 Full multi-process dev stack with dev auth (login as your macOS user
@@ -69,7 +62,7 @@ lumiod gateway &    # user lumio-gw, -addr 127.0.0.1:8080
 PAM service file `/etc/pam.d/lumiod` (see `docker/pam.d-lumiod`),
 polkit action file `/usr/share/polkit-1/actions/os.lumio.policy`
 (see `docker/os.lumio.policy`). Reach the gateway through an SSH tunnel;
-there is no TLS in Phase 4.
+there is no TLS until Phase 7.
 
 ## Build with the embedded frontend
 
@@ -86,13 +79,13 @@ produces `server/bin/lumiod` with `dist/` embedded via `go:embed`
 scripts/integration-test.sh
 ```
 
-Builds `docker/Dockerfile.ubuntu24` (Ubuntu 24.04, systemd as PID 1, cron as
-a demo unit), starts it privileged with cgroup v2 mounted, then asserts the
-REST surface with curl and the WS surface with `cmd/wscheck`. The Phase 2
-exit gate is a hard assertion: a subscribed `services.subscribe` channel
-must observe a `changed` event when the script runs
-`docker exec … systemctl stop cron`. The script removes the container and
-image on exit.
+Builds `docker/Dockerfile.ubuntu24` (Ubuntu 24.04, systemd as PID 1), starts
+it privileged with cgroup v2 mounted, then runs 66 REST, WebSocket, broker,
+audit and repair assertions. The Phase 5 exit gate starts with a failed HTTP
+service, finds its error through Services and Logs, validates and writes its
+protected configuration, restarts it, confirms the endpoint, and checks the
+audit and rollback records. The script removes the container and image on
+exit.
 
 ## Design decisions and deviations
 
@@ -124,18 +117,19 @@ flags binary content inside the success payload instead:
 size are still returned). Encoding detection: NUL byte in the first 8000
 bytes, or invalid UTF-8 after trimming a trailing partial rune.
 
-### `services.action` and other future capabilities
+### Privileged mutations
 
-Endpoints whose phase has not shipped (`services.action`, `files.write`,
-`updates.*`) answer `503 unavailable` in the standard error envelope rather
-than 404, per PROTOCOL.md's capability table.
+Service actions, saved package plans and protected `/etc` writes pass through
+the peer-credentialed broker, polkit and audit log. A capability whose backing
+service is absent answers `503 unavailable` in the standard error envelope
+rather than 404, per PROTOCOL.md's capability table.
 
 ### Container binding
 
 `docker/lumiod-gateway.service` binds 0.0.0.0:8080 only so the Docker port
 forward used by the integration test can reach the gateway. The default
 remains `127.0.0.1:8080` everywhere else. The container runs the full
-Phase 4 process set (gateway as `lumio-gw`, sessiond and broker as root)
+Phase 5 process set (gateway as `lumio-gw`, sessiond and broker as root)
 with a test user `alice` and a testbed-only polkit rules file
 (`docker/os.lumio-testbed.rules`) that makes authorization deterministic:
 `alice` may manage services, `ssh.service` requires `auth_admin` (the

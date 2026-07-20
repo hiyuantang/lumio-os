@@ -10,7 +10,8 @@ import (
 func TestQueryValidate(t *testing.T) {
 	valid := []Query{
 		{},
-		{Unit: "nginx.service", Priority: "warning", Since: "2026-07-19T00:10:02Z", Limit: 50, After: "s=abc;i=1"},
+		{Unit: "nginx.service", Priority: "warning", Since: "2026-07-19T00:10:02Z", Boot: "current", Limit: 50, After: "s=abc;i=1"},
+		{Boot: "previous"},
 		{Priority: "4"},
 		{Unit: "my-unit@instance.service"},
 	}
@@ -25,6 +26,7 @@ func TestQueryValidate(t *testing.T) {
 		{Unit: "a;rm -rf"},
 		{Priority: "verbose"},
 		{Since: "yesterday"},
+		{Boot: "old"},
 		{Limit: -1},
 		{Limit: MaxLimit + 1},
 		{After: "-x"},
@@ -38,13 +40,14 @@ func TestQueryValidate(t *testing.T) {
 
 func TestCLIArgs(t *testing.T) {
 	cli := &CLI{bin: "/usr/bin/journalctl"}
-	q := Query{Unit: "cron.service", Priority: "Warning", Since: "2026-07-19T00:10:02Z", Limit: 25, After: "s=abc;i=1"}
+	q := Query{Unit: "cron.service", Priority: "Warning", Since: "2026-07-19T00:10:02Z", Boot: "previous", Limit: 25, After: "s=abc;i=1"}
 	args := strings.Join(cli.args(q, false), " ")
 	for _, want := range []string{
 		"--output=json",
 		"-u cron.service",
 		"-p warning",
 		"--since 2026-07-19 00:10:02 UTC",
+		"--boot=-1",
 		"--after-cursor s=abc;i=1",
 		"-n 25",
 	} {
@@ -67,5 +70,14 @@ func TestCLIArgs(t *testing.T) {
 func TestFormatSince(t *testing.T) {
 	if got := formatSince("2026-07-19T05:30:00+03:00"); got != "2026-07-19 02:30:00 UTC" {
 		t.Errorf("formatSince = %q", got)
+	}
+}
+
+func TestPreviousBootUnavailable(t *testing.T) {
+	if !previousBootUnavailable("Data from the specified boot (-1) is not available") {
+		t.Fatal("expected missing previous boot to be recognised")
+	}
+	if previousBootUnavailable("permission denied") {
+		t.Fatal("unrelated errors must not be hidden")
 	}
 }

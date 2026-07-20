@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import type { LoadSample, ServiceAction, ServiceUnit, SystemOverview } from '../api/source';
+import type { LoadSample, ServiceAction, ServiceDetail, ServiceUnit, SystemOverview } from '../api/source';
 
 export type {
   LoadSample,
@@ -39,6 +39,30 @@ export function getService(name: string): ServiceUnit | undefined {
   return found ? { ...found } : undefined;
 }
 
+export function getServiceDetail(name: string): ServiceDetail {
+  const unit = getService(name);
+  if (!unit) throw new Error(`Unknown unit ${name}`);
+  const dependencies = name === 'nginx.service'
+    ? [
+        { name: 'network.target', relation: 'requires' as const },
+        { name: 'system.slice', relation: 'wants' as const },
+      ]
+    : [{ name: 'basic.target', relation: 'requires' as const }];
+  return {
+    name,
+    documentation: name === 'nginx.service' ? ['man:nginx(8)', 'https://nginx.org/en/docs/'] : [],
+    dependencies,
+    files: [
+      {
+        path: `/usr/lib/systemd/system/${name}`,
+        content: `[Unit]\nDescription=${unit.description}\n\n[Service]\nExecStart=/usr/bin/${name.replace('.service', '')}\n`,
+        override: false,
+        error: null,
+      },
+    ],
+  };
+}
+
 export function subscribeServices(fn: () => void): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -72,6 +96,10 @@ export function runServiceAction(name: string, action: ServiceAction): Promise<S
           unit.state = 'active';
           unit.pid = nextPid();
           unit.memoryMb = unit.memoryMb || 8;
+          unit.since = 'now';
+          break;
+        case 'reload':
+          unit.state = 'active';
           unit.since = 'now';
           break;
         case 'enable':

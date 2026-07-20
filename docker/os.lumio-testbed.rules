@@ -4,6 +4,9 @@
 // container. A production host must rely on the .policy defaults and real
 // administrator policy, never on a blanket per-user grant like this.
 polkit.addRule(function(action, subject) {
+	if ((action.id === "os.lumio.packages.apply" || action.id === "os.lumio.files.write-privileged") && subject.user === "alice") {
+		return polkit.Result.YES;
+	}
     if (action.id === "os.lumio.services.manage") {
         var unit = action.lookup("unit");
         if (unit === "ssh.service") {

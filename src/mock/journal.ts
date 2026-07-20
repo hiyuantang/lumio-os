@@ -30,6 +30,7 @@ let nextId = 1;
 
 export function makeLogLine(at: number = Date.now()): LogLine {
   const t = TEMPLATES[Math.floor(Math.random() * TEMPLATES.length)];
+  const pid = 400 + Math.floor(Math.random() * 4000);
   return {
     id: nextId++,
     timestamp: at,
@@ -37,8 +38,15 @@ export function makeLogLine(at: number = Date.now()): LogLine {
     priorityCode: PRIORITY_CODE[t.priority],
     unit: t.unit,
     message: t.message,
-    pid: 400 + Math.floor(Math.random() * 4000),
+    pid,
     hostname: 'atlas.lan',
+    bootId: 'mock-current-boot',
+    fields: {
+      _PID: String(pid),
+      _HOSTNAME: 'atlas.lan',
+      _BOOT_ID: 'mock-current-boot',
+      SYSLOG_IDENTIFIER: t.unit.replace('.service', ''),
+    },
   };
 }
 

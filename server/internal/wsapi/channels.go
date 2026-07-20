@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"lumio-os/server/internal/broker"
 	"lumio-os/server/internal/httpapi"
 	"lumio-os/server/internal/journal"
 	"lumio-os/server/internal/services"
@@ -99,8 +100,56 @@ func (c *conn) startChannel(ctx context.Context, ch *channel, params json.RawMes
 		c.enqueue(subscribedFrame(ch.id, map[string]any{"session": sess.Token()}))
 		go c.runTerminal(ctx, ch, sess, att)
 		return nil
+	case "updates.progress":
+		var p struct {
+			RequestID string `json:"requestId"`
+		}
+		if len(params) > 0 {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return errValidation("invalid params: " + err.Error())
+			}
+		}
+		if p.RequestID == "" || len(p.RequestID) > 128 {
+			return errValidation("requestId is required")
+		}
+		if c.hub.deps.BrokerSocket == "" {
+			return errUnavailable("update progress is not available in this build")
+		}
+		c.enqueue(subscribedFrame(ch.id, nil))
+		go c.runUpdateProgress(ctx, ch, p.RequestID)
+		return nil
 	}
 	return errValidation("unknown capability")
+}
+
+func (c *conn) runUpdateProgress(ctx context.Context, ch *channel, requestID string) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	lastUpdate := time.Time{}
+	for {
+		progress, err := broker.UpdateProgress(ctx, c.hub.deps.BrokerSocket, requestID)
+		if err != nil {
+			if ctx.Err() == nil {
+				c.failChannel(ch, err)
+			}
+			return
+		}
+		if progress.UpdatedAt.After(lastUpdate) {
+			lastUpdate = progress.UpdatedAt
+			if !c.sendEvent(ctx, ch, progress) {
+				return
+			}
+		}
+		if progress.Done {
+			c.closeChannel(ch, nil)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func errValidation(msg string) error {

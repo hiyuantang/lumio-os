@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	maxBodyBytes      = 1 << 20
-	maxWriteBodyBytes = 12 << 20
+	maxBodyBytes                = 1 << 20
+	maxWriteBodyBytes           = 12 << 20
+	maxPrivilegedWriteBodyBytes = 2 << 20
 )
 
 type Deps struct {
@@ -41,15 +42,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/system/overview", s.handleOverview)
 	mux.HandleFunc("GET /api/v1/system/metrics", s.handleMetrics)
 	mux.HandleFunc("GET /api/v1/services", s.handleServices)
+	mux.HandleFunc("GET /api/v1/services/detail", s.handleServiceDetail)
 	mux.HandleFunc("GET /api/v1/journal", s.handleJournal)
 	mux.HandleFunc("GET /api/v1/files/list", s.handleFilesList)
 	mux.HandleFunc("GET /api/v1/files/read", s.handleFilesRead)
 	mux.HandleFunc("PUT /api/v1/files/write", s.handleFilesWrite)
 	mux.HandleFunc("POST /api/v1/files/delete", s.handleFilesDelete)
+	mux.HandleFunc("POST /api/v1/files/write-privileged", s.handleFilesWritePrivileged)
 	mux.HandleFunc("POST /api/v1/services/action", s.handleServicesAction)
-	mux.HandleFunc("POST /api/v1/updates/refresh", s.handleUnavailable)
-	mux.HandleFunc("POST /api/v1/updates/plan", s.handleUnavailable)
-	mux.HandleFunc("POST /api/v1/updates/apply", s.handleUnavailable)
+	mux.HandleFunc("POST /api/v1/updates/refresh", s.handleUpdatesRefresh)
+	mux.HandleFunc("POST /api/v1/updates/plan", s.handleUpdatesPlan)
+	mux.HandleFunc("POST /api/v1/updates/apply", s.handleUpdatesApply)
 	if s.deps.WS != nil {
 		mux.Handle("GET /api/v1/ws", s.deps.WS)
 	}
@@ -76,6 +79,8 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 		limit := int64(maxBodyBytes)
 		if r.URL.Path == "/api/v1/files/write" {
 			limit = maxWriteBodyBytes
+		} else if r.URL.Path == "/api/v1/files/write-privileged" {
+			limit = maxPrivilegedWriteBodyBytes
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, limit)
 		next.ServeHTTP(w, r)

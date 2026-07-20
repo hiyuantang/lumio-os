@@ -29,3 +29,22 @@ test('mock files: edit, save, re-read and delete round-trip', async ({ page }) =
   await expect(page.getByTestId('delete-confirm')).toHaveCount(0);
   await expect(files.getByTestId('file-row-notes.txt')).toHaveCount(0);
 });
+
+test('mock files: protected editor shows diff, validates and keeps rollback', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('login-username').fill('demo');
+  await page.getByTestId('login-password').fill('demo');
+  await page.getByTestId('login-submit').click();
+  await page.getByTestId('dock-app-files').click();
+
+  const files = page.getByTestId('app-files');
+  await files.getByTestId('system-file-button').click();
+  await page.getByTestId('system-file-open').click();
+  const input = page.getByTestId('system-file-input');
+  await expect(input).toContainText('listen 80');
+  await input.fill('server {\n    listen 8080;\n}\n');
+  await expect(page.getByTestId('system-file-diff')).toContainText('+     listen 8080;');
+  await page.getByTestId('system-file-save').click();
+  await expect(page.getByTestId('system-file-result')).toContainText('nginx validation passed');
+  await expect(page.getByTestId('system-file-result')).toContainText('Rollback copy kept');
+});

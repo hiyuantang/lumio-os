@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { ComponentType, SVGProps } from 'react';
-import { IconFolder, IconGear, IconHome, IconList, IconTerminal } from '../shell/icons';
+import { IconChip, IconFolder, IconGear, IconHome, IconList, IconTerminal } from '../shell/icons';
 
-export type AppId = 'home' | 'services' | 'files' | 'terminal' | 'logs';
+export type AppId = 'home' | 'services' | 'files' | 'terminal' | 'logs' | 'updates';
 
 export interface AppMeta {
   id: AppId;
@@ -12,7 +12,7 @@ export interface AppMeta {
   minSize: { w: number; h: number };
 }
 
-export const APP_ORDER: AppId[] = ['home', 'services', 'files', 'terminal', 'logs'];
+export const APP_ORDER: AppId[] = ['home', 'services', 'files', 'terminal', 'logs', 'updates'];
 
 export const APPS: Record<AppId, AppMeta> = {
   home: {
@@ -49,5 +49,12 @@ export const APPS: Record<AppId, AppMeta> = {
     icon: IconList,
     defaultSize: { w: 720, h: 500 },
     minSize: { w: 460, h: 340 },
+  },
+  updates: {
+    id: 'updates',
+    title: 'Updates',
+    icon: IconChip,
+    defaultSize: { w: 760, h: 540 },
+    minSize: { w: 520, h: 380 },
   },
 };

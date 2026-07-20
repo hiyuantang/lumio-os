@@ -30,6 +30,9 @@ func (f fakeServices) List(context.Context) ([]services.Unit, error) {
 	}
 	return []services.Unit{{Name: "cron.service", ActiveState: "active"}}, nil
 }
+func (f fakeServices) Detail(context.Context, string) (services.Detail, error) {
+	return services.Detail{}, services.ErrUnavailable
+}
 func (f fakeServices) SubscribeChanges(context.Context) (<-chan services.Unit, error) {
 	return nil, services.ErrUnavailable
 }
@@ -146,7 +149,7 @@ func TestUnavailableCapability(t *testing.T) {
 	}
 	subscribe(t, ws, 4, "updates.progress", `{}`)
 	f = readFrame(t, ws)
-	if f.Type != "error" || f.Error == nil || f.Error.Code != "unavailable" {
+	if f.Type != "error" || f.Error == nil || f.Error.Code != "validation_failed" {
 		t.Fatalf("frame = %+v", f)
 	}
 	subscribe(t, ws, 5, "bogus.cap", `{}`)

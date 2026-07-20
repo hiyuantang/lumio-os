@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+[Unit]
+Description=Lumio Phase 5 repair fixture
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/lumio-test-web.py
+
+[Install]
+WantedBy=multi-user.target

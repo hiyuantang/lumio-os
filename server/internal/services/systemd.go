@@ -4,6 +4,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -12,16 +15,17 @@ import (
 )
 
 const (
-	busName        = "org.freedesktop.systemd1"
-	managerPath    = dbus.ObjectPath("/org/freedesktop/systemd1")
-	managerIface   = "org.freedesktop.systemd1.Manager"
-	unitIface      = "org.freedesktop.systemd1.Unit"
-	propsIface     = "org.freedesktop.DBus.Properties"
-	pollInterval   = 10 * time.Second
-	listTimeout    = 15 * time.Second
-	serviceSuffix  = ".service"
-	signalBufSize  = 64
-	subscriberSize = 64
+	busName         = "org.freedesktop.systemd1"
+	managerPath     = dbus.ObjectPath("/org/freedesktop/systemd1")
+	managerIface    = "org.freedesktop.systemd1.Manager"
+	unitIface       = "org.freedesktop.systemd1.Unit"
+	propsIface      = "org.freedesktop.DBus.Properties"
+	pollInterval    = 10 * time.Second
+	listTimeout     = 15 * time.Second
+	serviceSuffix   = ".service"
+	signalBufSize   = 64
+	subscriberSize  = 64
+	maxUnitFileSize = 1 << 20
 )
 
 type Manager struct {
@@ -59,6 +63,125 @@ func (m *Manager) List(ctx context.Context) ([]Unit, error) {
 	ctx, cancel := context.WithTimeout(ctx, listTimeout)
 	defer cancel()
 	return m.listUnits(ctx)
+}
+
+func (m *Manager) Detail(ctx context.Context, name string) (Detail, error) {
+	if !m.Available() {
+		return Detail{}, ErrUnavailable
+	}
+	ctx, cancel := context.WithTimeout(ctx, listTimeout)
+	defer cancel()
+	call := m.managerObject().CallWithContext(ctx, managerIface+".GetUnit", 0, name)
+	if call.Err != nil {
+		return Detail{}, fmt.Errorf("get unit: %w", call.Err)
+	}
+	if len(call.Body) == 0 {
+		return Detail{}, fmt.Errorf("get unit: empty reply")
+	}
+	path, ok := call.Body[0].(dbus.ObjectPath)
+	if !ok {
+		return Detail{}, fmt.Errorf("get unit: unexpected reply shape")
+	}
+	propsCall := m.conn.Object(busName, path).CallWithContext(ctx, propsIface+".GetAll", 0, unitIface)
+	if propsCall.Err != nil {
+		return Detail{}, fmt.Errorf("get unit properties: %w", propsCall.Err)
+	}
+	if len(propsCall.Body) == 0 {
+		return Detail{}, fmt.Errorf("get unit properties: empty reply")
+	}
+	props, ok := propsCall.Body[0].(map[string]dbus.Variant)
+	if !ok {
+		return Detail{}, fmt.Errorf("get unit properties: unexpected reply shape")
+	}
+	detail := Detail{
+		Name:          name,
+		Documentation: variantStrings(props["Documentation"]),
+		Dependencies:  m.dependencies(ctx, props),
+		Files:         unitFiles(props),
+	}
+	return detail, nil
+}
+
+func (m *Manager) dependencies(ctx context.Context, props map[string]dbus.Variant) []Dependency {
+	seen := map[string]bool{}
+	dependencies := []Dependency{}
+	for _, relation := range []string{"Requires", "Wants"} {
+		for _, path := range variantObjectPaths(props[relation]) {
+			name := m.unitID(ctx, path)
+			key := relation + "\x00" + name
+			if name == "" || seen[key] {
+				continue
+			}
+			seen[key] = true
+			dependencies = append(dependencies, Dependency{Name: name, Relation: strings.ToLower(relation)})
+		}
+	}
+	sort.Slice(dependencies, func(i, j int) bool {
+		if dependencies[i].Relation == dependencies[j].Relation {
+			return dependencies[i].Name < dependencies[j].Name
+		}
+		return dependencies[i].Relation < dependencies[j].Relation
+	})
+	return dependencies
+}
+
+func unitFiles(props map[string]dbus.Variant) []UnitFile {
+	paths := []struct {
+		path     string
+		override bool
+	}{}
+	if path := variantString(props["FragmentPath"]); path != "" {
+		paths = append(paths, struct {
+			path     string
+			override bool
+		}{path: path})
+	}
+	for _, path := range variantStrings(props["DropInPaths"]) {
+		paths = append(paths, struct {
+			path     string
+			override bool
+		}{path: path, override: true})
+	}
+	files := make([]UnitFile, 0, len(paths))
+	for _, item := range paths {
+		files = append(files, readUnitFile(item.path, item.override))
+	}
+	return files
+}
+
+func readUnitFile(path string, override bool) UnitFile {
+	file := UnitFile{Path: path, Override: override}
+	f, err := os.Open(path)
+	if err != nil {
+		file.Error = "Unable to read this unit file."
+		return file
+	}
+	defer f.Close()
+	content, err := io.ReadAll(io.LimitReader(f, maxUnitFileSize+1))
+	if err != nil {
+		file.Error = "Unable to read this unit file."
+		return file
+	}
+	if len(content) > maxUnitFileSize {
+		file.Error = "This unit file is too large to display."
+		return file
+	}
+	file.Content = string(content)
+	return file
+}
+
+func variantStrings(v dbus.Variant) []string {
+	if values, ok := v.Value().([]string); ok {
+		return values
+	}
+	return []string{}
+}
+
+func variantObjectPaths(v dbus.Variant) []dbus.ObjectPath {
+	if values, ok := v.Value().([]dbus.ObjectPath); ok {
+		return values
+	}
+	return []dbus.ObjectPath{}
 }
 
 func (m *Manager) SubscribeChanges(ctx context.Context) (<-chan Unit, error) {

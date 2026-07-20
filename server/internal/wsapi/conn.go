@@ -214,10 +214,7 @@ func (c *conn) handleSubscribe(f inFrame) {
 		return
 	}
 	switch f.Capability {
-	case "system.metrics", "services.subscribe", "journal.stream", "terminal.open":
-	case "updates.progress":
-		c.enqueue(errorFrame(f.Channel, httpapi.NewError(httpapi.CodeUnavailable, "This capability is not available in this build.")))
-		return
+	case "system.metrics", "services.subscribe", "journal.stream", "terminal.open", "updates.progress":
 	default:
 		c.enqueue(errorFrame(f.Channel, httpapi.NewError(httpapi.CodeValidationFailed, "Unknown capability.")))
 		return

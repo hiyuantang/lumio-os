@@ -88,6 +88,13 @@ export interface WireServicesList {
   units: WireServiceUnit[];
 }
 
+export interface WireServiceDetail {
+  name: string;
+  documentation: string[];
+  dependencies: { name: string; relation: 'requires' | 'wants' }[];
+  files: { path: string; content?: string; override: boolean; error?: string }[];
+}
+
 export interface WireServiceActionResult {
   unit: {
     name: string;
@@ -162,6 +169,49 @@ export interface WireFileWrite {
   path: string;
   revision: string;
   sizeBytes: number;
+}
+
+export interface WirePrivilegedFileWrite {
+  file: {
+    path: string;
+    revision: string;
+    sizeBytes: number;
+    rollbackRef: string;
+    validation: { kind: string; checked: boolean };
+  };
+  restart?: { success: boolean; error?: string };
+}
+
+export interface WireUpdatePackage {
+  name: string;
+  fromVersion: string;
+  toVersion: string;
+  security: boolean;
+  downloadBytes: number;
+  installedDeltaBytes: number;
+}
+
+export interface WireUpdatePlan {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  packages: WireUpdatePackage[];
+  securityCount: number;
+  downloadBytes: number;
+  installedDeltaBytes: number;
+  rebootRequired: boolean;
+}
+
+export interface WireUpdateProgress {
+  requestId: string;
+  planId: string;
+  phase: string;
+  percent: number;
+  message: string;
+  done: boolean;
+  success: boolean;
+  error?: string;
+  updatedAt: string;
 }
 
 export type ServerFrame =

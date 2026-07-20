@@ -8,7 +8,7 @@ export GOMODCACHE="$ROOT/.tools/gomodcache"
 export GOCACHE="$ROOT/.tools/gocache"
 export GOPATH="$ROOT/.tools/gopath"
 
-IMAGE="lumio-os-integration:phase4"
+IMAGE="lumio-os-integration:phase5"
 CONTAINER="lumio-os-it"
 PORT="${PORT:-18080}"
 BASE="http://127.0.0.1:${PORT}"
@@ -161,20 +161,56 @@ expect_in "overview"                "$BASE/api/v1/system/overview" '"uptimeSecon
 expect_in "metrics sample"          "$BASE/api/v1/system/metrics"  '"cpu"'
 expect_in "services has cron"       "$BASE/api/v1/services"        '"name":"cron.service"'
 expect_in "services has enabled"    "$BASE/api/v1/services"        '"enabledState":"enabled"'
+expect_in "service detail has unit file" "$BASE/api/v1/services/detail?name=cron.service" '"content":"[Unit]'
+expect_status_code "service detail rejects bad unit" GET "$BASE/api/v1/services/detail?name=../../etc/passwd" 400 '"code":"validation_failed"'
 expect_in "journal entries"         "$BASE/api/v1/journal?limit=5" '"cursor"'
 expect_in "journal nextCursor"      "$BASE/api/v1/journal?limit=5" '"nextCursor"'
 expect_in "journal unit filter"     "$BASE/api/v1/journal?unit=cron.service&limit=5" '"ok":true'
+expect_in "journal current boot filter" "$BASE/api/v1/journal?boot=current&limit=5" '"ok":true'
+expect_in "journal previous boot filter" "$BASE/api/v1/journal?boot=previous&limit=5" '"entries":[]'
 SINCE="$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ)"
 expect_in "journal since filter"    "$BASE/api/v1/journal?since=${SINCE//:/%3A}&limit=5" '"ok":true'
 expect_status_code "journal bad priority" GET "$BASE/api/v1/journal?priority=bogus" 400 '"code":"validation_failed"'
 expect_in "files.list /etc"         "$BASE/api/v1/files/list?path=/etc" '"name":"hostname"'
 expect_in "files.read /etc/hostname" "$BASE/api/v1/files/read?path=/etc/hostname" '"revision":"sha256:'
 expect_status_code "files.read missing -> 404" GET "$BASE/api/v1/files/read?path=/no/such/file" 404 '"code":"not_found"'
-expect_status_code "updates.apply -> unavailable" POST "$BASE/api/v1/updates/apply" 503 '"code":"unavailable"'
 expect_status_code "unknown route -> 404" GET "$BASE/api/v1/nope" 404 '"code":"not_found"'
 
-echo "== WebSocket assertions (authenticated) =="
+echo "== Phase 5 Updates: saved plan + progress stream =="
 WSAUTH=(-cookie "lumio_session=$SESSION" -csrf "$CSRF")
+UPDATE_PLAN="$(curl -s -b "$COOKIE_JAR" -H "X-Lumio-CSRF: $CSRF" -H 'Content-Type: application/json' -X POST \
+    -d '{"requestId":"it-up-plan"}' "$BASE/api/v1/updates/plan")"
+PLAN_ID="$(json_field "$UPDATE_PLAN" id)"
+if [[ "$PLAN_ID" == pln_* ]] && grep -q '"packages":\[' <<<"$UPDATE_PLAN" && grep -q '"securityCount":' <<<"$UPDATE_PLAN"; then
+    ok "updates.plan returns a saved package plan"
+else
+    echo "  got: $UPDATE_PLAN"
+    bad "updates.plan returns a saved package plan"
+fi
+UPDATE_APPLY="$(curl -s -b "$COOKIE_JAR" -H "X-Lumio-CSRF: $CSRF" -H 'Content-Type: application/json' -X POST \
+    -d "{\"requestId\":\"it-up-apply\",\"planId\":\"$PLAN_ID\"}" "$BASE/api/v1/updates/apply")"
+if grep -q '"requestId":"it-up-apply"' <<<"$UPDATE_APPLY"; then
+    ok "updates.apply accepts the exact saved plan"
+else
+    echo "  got: $UPDATE_APPLY"
+    bad "updates.apply accepts the exact saved plan"
+fi
+if "$BUILD_DIR/host/wscheck" "${WSAUTH[@]}" -url "$WSURL" -mode updates -match it-up-apply -timeout 20s \
+    >"$BUILD_DIR/updates.log" 2>&1; then
+    ok "ws updates.progress reaches successful completion"
+else
+    cat "$BUILD_DIR/updates.log"
+    bad "ws updates.progress reaches successful completion"
+fi
+UPDATE_AUDIT="$(audit_query "SELECT kind || '|' || outcome FROM audit WHERE request_id='it-up-apply' ORDER BY id")"
+if grep -q 'begin|pending' <<<"$UPDATE_AUDIT" && grep -q 'end|success' <<<"$UPDATE_AUDIT"; then
+    ok "packages.applyPlan audit has begin+end"
+else
+    echo "  audit: $UPDATE_AUDIT"
+    bad "packages.applyPlan audit has begin+end"
+fi
+
+echo "== WebSocket assertions (authenticated) =="
 if "$BUILD_DIR/host/wscheck" "${WSAUTH[@]}" -url "$WSURL" -mode metrics -timeout 15s >"$BUILD_DIR/metrics.log" 2>&1; then
     ok "ws system.metrics tick"
 else
@@ -386,6 +422,54 @@ fi
 echo "== Phase 4 gate 11: unknown cookie -> 401 =="
 CODE="$(curl -s -o /dev/null -w '%{http_code}' -H 'Cookie: lumio_session=deadbeef' "$BASE/api/v1/services")"
 if [[ "$CODE" == 401 ]]; then ok "unknown session cookie -> 401"; else bad "unknown session cookie -> 401 (got $CODE)"; fi
+
+echo "== Phase 5 EXIT GATE: diagnose and repair a failed web service =="
+if docker exec "$CONTAINER" systemctl is-failed --quiet lumio-test-web.service; then
+    ok "repair fixture starts in failed state"
+else
+    bad "repair fixture starts in failed state"
+fi
+expect_in "failed web service is visible in Services" "$BASE/api/v1/services" '"name":"lumio-test-web.service"'
+expect_in "failed web service error is visible in Logs" "$BASE/api/v1/journal?unit=lumio-test-web.service&limit=20" 'port must be between 1024 and 65535'
+WEB_CONFIG="$(curl -s -b "$COOKIE_JAR" "$BASE/api/v1/files/read?path=/etc/lumio-test-web.json")"
+WEB_REV="$(json_field "$WEB_CONFIG" revision)"
+if [[ -n "$WEB_REV" ]] && grep -q 'eyJwb3J0IjotMX0K' <<<"$WEB_CONFIG"; then
+    ok "protected web-service config is readable with a revision"
+else
+    echo "  got: $WEB_CONFIG"
+    bad "protected web-service config is readable with a revision"
+fi
+WEB_WRITE="$(curl -s -b "$COOKIE_JAR" -H "X-Lumio-CSRF: $CSRF" -H 'Content-Type: application/json' -X POST \
+    -d "{\"path\":\"/etc/lumio-test-web.json\",\"content\":\"$(b64 '{"port":18081}')\",\"expectedRevision\":\"$WEB_REV\",\"restartUnit\":\"lumio-test-web.service\",\"requestId\":\"it-web-repair\"}" \
+    "$BASE/api/v1/files/write-privileged")"
+if grep -q '"validation":{"kind":"json","checked":true}' <<<"$WEB_WRITE" \
+    && grep -q '"restart":{"success":true' <<<"$WEB_WRITE"; then
+    ok "protected file validates, writes atomically and restarts its service"
+else
+    echo "  got: $WEB_WRITE"
+    bad "protected file validates, writes atomically and restarts its service"
+fi
+WEB_HEALTHY=0
+for _ in $(seq 1 20); do
+    if docker exec "$CONTAINER" curl -fsS http://127.0.0.1:18081 2>/dev/null | grep -q 'lumio phase 5 web service'; then
+        WEB_HEALTHY=1
+        break
+    fi
+    sleep 0.25
+done
+if [[ "$WEB_HEALTHY" == 1 ]]; then
+    ok "EXIT GATE: repaired web service answers HTTP"
+else
+    bad "EXIT GATE: repaired web service answers HTTP"
+fi
+WEB_AUDIT="$(audit_query "SELECT kind || '|' || outcome FROM audit WHERE request_id='it-web-repair' ORDER BY id")"
+ROLLBACKS="$(docker exec "$CONTAINER" sh -c 'find /var/lib/lumio/rollback/files -type f | wc -l' 2>/dev/null)"
+if grep -q 'begin|pending' <<<"$WEB_AUDIT" && grep -q 'end|success' <<<"$WEB_AUDIT" && [[ "$ROLLBACKS" -ge 1 ]]; then
+    ok "protected repair is audited and has a rollback copy"
+else
+    echo "  audit: $WEB_AUDIT / rollbacks: $ROLLBACKS"
+    bad "protected repair is audited and has a rollback copy"
+fi
 
 echo
 echo "======================================"

@@ -29,6 +29,7 @@ RUN apt-get update \
         libpam-modules \
         sqlite3 \
         openssh-server \
+        python3 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -41,9 +42,13 @@ COPY docker/lumiod-gateway.service docker/lumiod-sessiond.service docker/lumiod-
 COPY docker/pam.d-lumiod /etc/pam.d/lumiod
 COPY docker/os.lumio.policy /usr/share/polkit-1/actions/os.lumio.policy
 COPY docker/os.lumio-testbed.rules /etc/polkit-1/rules.d/90-lumio-testbed.rules
+COPY docker/lumio-test-web.py /usr/local/lib/lumio-test-web.py
+COPY docker/lumio-test-web.service /etc/systemd/system/lumio-test-web.service
 
 RUN printf 'd /run/sshd 0755 root root -\n' > /etc/tmpfiles.d/lumio-testbed.conf \
-    && systemctl enable lumiod-gateway.service lumiod-sessiond.service lumiod-broker.service
+    && printf '{"port":-1}\n' > /etc/lumio-test-web.json \
+    && chmod 0644 /etc/lumio-test-web.json /usr/local/lib/lumio-test-web.py \
+    && systemctl enable lumiod-gateway.service lumiod-sessiond.service lumiod-broker.service lumio-test-web.service
 
 STOPSIGNAL SIGRTMIN+3
 

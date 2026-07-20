@@ -22,6 +22,7 @@ type Query struct {
 	Unit     string
 	Priority string
 	Since    string
+	Boot     string
 	Limit    int
 	After    string
 }
@@ -66,6 +67,9 @@ func (q Query) Validate() error {
 		if _, err := time.Parse(time.RFC3339, q.Since); err != nil {
 			return fmt.Errorf("%w: since must be an RFC 3339 timestamp", ErrValidation)
 		}
+	}
+	if q.Boot != "" && q.Boot != "current" && q.Boot != "previous" {
+		return fmt.Errorf("%w: boot must be current or previous", ErrValidation)
 	}
 	if q.Limit < 0 || q.Limit > MaxLimit {
 		return fmt.Errorf("%w: limit must be between 0 and %d", ErrValidation, MaxLimit)
